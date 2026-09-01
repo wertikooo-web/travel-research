@@ -126,3 +126,62 @@ class TripHints(BaseModel):
 class ParseTripRequest(BaseModel):
     raw_text: str
     hints: Optional[TripHints] = None
+
+
+# --- Candidate generation (Milestone 2) -------------------------------------
+
+DestinationType = Literal["city", "island", "resort_region", "country", "archipelago"]
+CandidateCategory = Literal["core", "alternative", "wildcard"]
+CandidateSource = Literal["llm", "user"]
+
+
+class Candidate(BaseModel):
+    """A destination worth researching further — a hypothesis, not a verified fact.
+
+    Every field here is either the LLM's reasoning or a normalization-layer
+    decision. Nothing about actual flights, hotels, prices, weather, visas or
+    safety belongs on this model — those are verified facts that later
+    milestones attach, never something this generator is allowed to assert.
+    """
+
+    id: Optional[str] = None  # assigned by the backend, never trusted from the LLM
+    destination_name: str
+    country_code: Optional[str] = None
+    destination_type: Optional[DestinationType] = None
+    reason_to_check: str
+    matched_preferences: List[str] = Field(default_factory=list)
+    potential_conflicts: List[str] = Field(default_factory=list)
+    source: CandidateSource = "llm"
+    candidate_category: CandidateCategory = "core"
+    research_status: Literal["unverified"] = "unverified"
+
+    @field_validator("country_code", mode="before")
+    @classmethod
+    def _norm_country_code(cls, v):
+        return _iso2(v)
+
+    @field_validator("destination_name", mode="before")
+    @classmethod
+    def _norm_destination_name(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+
+class CandidateGenerationRequest(BaseModel):
+    """Currently no user-provided fields — the confirmed brief is the only input.
+    Kept as its own model so future overrides (e.g. custom limits) don't
+    require breaking the endpoint's request shape."""
+
+
+class CandidateRunSummary(BaseModel):
+    id: str
+    trip_id: str
+    brief_id: str
+    version: int
+    status: Literal["pending", "completed", "failed"]
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    candidate_count: int = 0
+    error: Optional[str] = None
+    candidates: List[Candidate] = Field(default_factory=list)
+    created_at: str
+    completed_at: Optional[str] = None

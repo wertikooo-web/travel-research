@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..db import get_db
+from ..llm.fake_candidate_provider import FakeCandidateProvider
 from ..llm.fake_provider import FakeLLMProvider
 from ..llm.provider import LLMConfigError, LLMParseError
+from ..research.candidate_generator import generate_candidates
 from ..schemas import ParseTripRequest, TripBrief
 
 router = APIRouter(prefix="/api/trips", tags=["trips"])
@@ -21,6 +23,17 @@ def get_llm_provider():
         from ..llm.anthropic_provider import AnthropicProvider
 
         return AnthropicProvider()
+    except LLMConfigError as e:
+        raise HTTPException(status_code=500, detail=f"LLM not configured: {e}") from e
+
+
+def get_candidate_provider():
+    if os.environ.get("TRIPMATCH_FAKE_LLM") == "1":
+        return FakeCandidateProvider()
+    try:
+        from ..llm.candidate_provider import AnthropicCandidateProvider
+
+        return AnthropicCandidateProvider()
     except LLMConfigError as e:
         raise HTTPException(status_code=500, detail=f"LLM not configured: {e}") from e
 
@@ -156,3 +169,79 @@ def confirm_trip_brief(trip_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(latest)
     return _serialize_brief(latest)
+
+
+def _serialize_candidate_run(run: models.CandidateRun) -> dict:
+    return {
+        "id": run.id,
+        "trip_id": run.trip_id,
+        "brief_id": run.brief_id,
+        "version": run.version,
+        "status": run.status,
+        "provider": run.provider,
+        "model": run.model,
+        "candidate_count": run.candidate_count,
+        "error": run.error,
+        "candidates": run.candidates or [],
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
+@router.post("/{trip_id}/candidates")
+def generate_trip_candidates(
+    trip_id: str,
+    db: Session = Depends(get_db),
+    provider=Depends(get_candidate_provider),
+):
+    trip = _get_trip_or_404(trip_id, db)
+    latest = _latest_brief(trip)
+    if latest is None or latest.confirmed_at is None:
+        raise HTTPException(status_code=400, detail="candidate generation requires a confirmed brief")
+
+    next_version = len(trip.candidate_runs) + 1
+    run = models.CandidateRun(
+        trip_id=trip.id,
+        brief_id=latest.id,
+        version=next_version,
+        status="pending",
+        provider=type(provider).__name__,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    try:
+        brief = TripBrief.model_validate(latest.structured_brief)
+        result = generate_candidates(brief, latest.raw_request, provider)
+    except LLMParseError as e:
+        run.status = "failed"
+        run.error = str(e)
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Candidate generation failed: {e}") from e
+    except Exception as e:  # malformed/unsalvageable output must not corrupt prior runs
+        run.status = "failed"
+        run.error = f"unexpected error: {e}"
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=502, detail="Candidate generation failed unexpectedly") from e
+
+    run.model = getattr(provider, "model", None)
+    run.status = "completed"
+    run.candidate_count = len(result.candidates)
+    run.candidates = [c.model_dump(mode="json") for c in result.candidates]
+    run.raw_llm_output = result.raw_llm_output
+    run.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(run)
+    return _serialize_candidate_run(run)
+
+
+@router.get("/{trip_id}/candidates")
+def get_trip_candidates(trip_id: str, db: Session = Depends(get_db)):
+    trip = _get_trip_or_404(trip_id, db)
+    if not trip.candidate_runs:
+        raise HTTPException(status_code=404, detail="no candidate run yet — call POST .../candidates first")
+    latest_run = trip.candidate_runs[-1]
+    return _serialize_candidate_run(latest_run)

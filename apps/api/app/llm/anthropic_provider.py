@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from ..schemas import TripBrief, TripHints
-from .provider import LLMConfigError, LLMParseError
+from .provider import LLMConfigError, LLMParseError, deep_json_decode, unwrap_self_nested_keys
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -132,6 +132,23 @@ def _load_system_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
 
+_TRIP_BRIEF_FIELDS = set(TripBrief.model_fields.keys())
+
+
+def _unwrap_if_nested(data: dict) -> dict:
+    """The model occasionally wraps the whole payload under one extra key
+    (e.g. {"trip_brief": {...actual fields...}}) instead of emitting the tool
+    schema's fields at the top level. Validating that as-is silently produces
+    an all-null TripBrief instead of raising, so detect and unwrap it."""
+    if not isinstance(data, dict) or _TRIP_BRIEF_FIELDS & data.keys():
+        return data
+    if len(data) == 1:
+        (only_value,) = data.values()
+        if isinstance(only_value, dict):
+            return only_value
+    return data
+
+
 def _build_user_message(raw_text: str, hints: Optional[TripHints]) -> str:
     parts = [f'Free-text trip description from the user:\n"""\n{raw_text}\n"""']
     if hints is not None:
@@ -185,7 +202,11 @@ class AnthropicProvider:
         if tool_use is None:
             raise LLMParseError("LLM did not return structured output")
 
+        tool_input = deep_json_decode(tool_use.input)
+        tool_input = unwrap_self_nested_keys(tool_input)
+        tool_input = _unwrap_if_nested(tool_input)
+
         try:
-            return TripBrief.model_validate(tool_use.input)
+            return TripBrief.model_validate(tool_input)
         except ValidationError as e:
             raise LLMParseError(f"LLM output failed schema validation: {e}") from e

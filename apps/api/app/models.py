@@ -31,6 +31,11 @@ class Trip(Base):
         back_populates="trip",
         order_by="TripBriefRecord.version",
     )
+    candidate_runs = relationship(
+        "CandidateRun",
+        back_populates="trip",
+        order_by="CandidateRun.version",
+    )
 
 
 class TripBriefRecord(Base):
@@ -45,3 +50,31 @@ class TripBriefRecord(Base):
     created_at = Column(DateTime, default=utcnow)
 
     trip = relationship("Trip", back_populates="briefs")
+
+
+class CandidateRun(Base):
+    """One candidate-generation attempt for a confirmed TripBrief.
+
+    Separate from TripBrief on purpose: the brief is the traveller's intent,
+    this is the system's research output for one version of that intent.
+    Runs are immutable once created and never overwrite each other, so brief
+    v1 -> run 1 and brief v2 -> run 2 can be compared later.
+    """
+
+    __tablename__ = "candidate_runs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    trip_id = Column(String, ForeignKey("trips.id"), nullable=False)
+    brief_id = Column(String, ForeignKey("trip_briefs.id"), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False, default="pending")  # pending|completed|failed
+    provider = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    candidate_count = Column(Integer, nullable=False, default=0)
+    error = Column(String, nullable=True)
+    raw_llm_output = Column(JSON, nullable=True)
+    candidates = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    trip = relationship("Trip", back_populates="candidate_runs")

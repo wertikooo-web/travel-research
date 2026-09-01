@@ -102,6 +102,38 @@ export interface BriefRecord {
   confirmed_at: string | null;
 }
 
+export type DestinationType = "city" | "island" | "resort_region" | "country" | "archipelago";
+export type CandidateCategory = "core" | "alternative" | "wildcard";
+export type CandidateSource = "llm" | "user";
+
+export interface Candidate {
+  id: string | null;
+  destination_name: string;
+  country_code: string | null;
+  destination_type: DestinationType | null;
+  reason_to_check: string;
+  matched_preferences: string[];
+  potential_conflicts: string[];
+  source: CandidateSource;
+  candidate_category: CandidateCategory;
+  research_status: "unverified";
+}
+
+export interface CandidateRun {
+  id: string;
+  trip_id: string;
+  brief_id: string;
+  version: number;
+  status: "pending" | "completed" | "failed";
+  provider: string | null;
+  model: string | null;
+  candidate_count: number;
+  error: string | null;
+  candidates: Candidate[];
+  created_at: string;
+  completed_at: string | null;
+}
+
 export function emptyTripBrief(): TripBrief {
   return {
     travellers: [],

@@ -1,0 +1,97 @@
+"""A small, deliberately non-exhaustive country name -> ISO 3166-1 alpha-2 map.
+
+Not a geo-database. The avoid-list a traveller states is free text, often in
+Russian ("Египет"), while a candidate's country_code is always ISO alpha-2 —
+without resolving the name we can't reliably connect the two. Covers common
+warm/beach destinations relevant to this product's launch market; extend as
+real avoid-list terms surface that this misses.
+"""
+
+COUNTRY_NAME_TO_ISO2: dict[str, str] = {
+    "egypt": "EG",
+    "египет": "EG",
+    "turkey": "TR",
+    "турция": "TR",
+    "турцию": "TR",
+    "thailand": "TH",
+    "таиланд": "TH",
+    "vietnam": "VN",
+    "вьетнам": "VN",
+    "greece": "GR",
+    "греция": "GR",
+    "spain": "ES",
+    "испания": "ES",
+    "italy": "IT",
+    "италия": "IT",
+    "portugal": "PT",
+    "португалия": "PT",
+    "cyprus": "CY",
+    "кипр": "CY",
+    "uae": "AE",
+    "united arab emirates": "AE",
+    "оаэ": "AE",
+    "dubai": "AE",
+    "дубай": "AE",
+    "oman": "OM",
+    "оман": "OM",
+    "morocco": "MA",
+    "марокко": "MA",
+    "tunisia": "TN",
+    "тунис": "TN",
+    "maldives": "MV",
+    "мальдивы": "MV",
+    "sri lanka": "LK",
+    "шри-ланка": "LK",
+    "шри ланка": "LK",
+    "indonesia": "ID",
+    "индонезия": "ID",
+    "bali": "ID",
+    "бали": "ID",
+    "malaysia": "MY",
+    "малайзия": "MY",
+    "philippines": "PH",
+    "филиппины": "PH",
+    "mexico": "MX",
+    "мексика": "MX",
+    "dominican republic": "DO",
+    "доминикана": "DO",
+    "cuba": "CU",
+    "куба": "CU",
+    "tanzania": "TZ",
+    "танзания": "TZ",
+    "zanzibar": "TZ",
+    "занзибар": "TZ",
+    "seychelles": "SC",
+    "сейшелы": "SC",
+    "mauritius": "MU",
+    "маврикий": "MU",
+    "jordan": "JO",
+    "иордания": "JO",
+    "israel": "IL",
+    "израиль": "IL",
+    "georgia": "GE",
+    "грузия": "GE",
+    "armenia": "AM",
+    "армения": "AM",
+    "azerbaijan": "AZ",
+    "азербайджан": "AZ",
+    "montenegro": "ME",
+    "черногория": "ME",
+    "croatia": "HR",
+    "хорватия": "HR",
+    "albania": "AL",
+    "албания": "AL",
+    "bulgaria": "BG",
+    "болгария": "BG",
+    "romania": "RO",
+    "румыния": "RO",
+    "moldova": "MD",
+    "молдова": "MD",
+}
+
+
+def resolve_country_code(term: str) -> str | None:
+    key = term.strip().lower()
+    if len(key) == 2 and key.isalpha():
+        return key.upper()
+    return COUNTRY_NAME_TO_ISO2.get(key)
