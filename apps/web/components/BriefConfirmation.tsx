@@ -127,9 +127,11 @@ export default function BriefConfirmation({ brief, rawRequest, onConfirm, onBack
   }
 
   function addTraveller() {
+    // No id here — the backend is the source of truth and assigns a stable,
+    // unique id on the next save (see PUT /api/trips/{id}/brief).
     setEdited((prev) => ({
       ...prev,
-      travellers: [...prev.travellers, { type: "adult" as const, id: `traveller_${prev.travellers.length + 1}` }],
+      travellers: [...prev.travellers, { type: "adult" as const, id: null }],
     }));
   }
 

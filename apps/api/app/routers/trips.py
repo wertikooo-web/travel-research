@@ -25,10 +25,31 @@ def get_llm_provider():
         raise HTTPException(status_code=500, detail=f"LLM not configured: {e}") from e
 
 
-def _assign_traveller_ids(brief: TripBrief) -> TripBrief:
-    for index, traveller in enumerate(brief.travellers, start=1):
-        traveller.id = f"traveller_{index}"
+def _normalize_traveller_ids(trip: models.Trip, brief: TripBrief, known_ids: set) -> TripBrief:
+    """Assign stable, unique traveller ids. The backend is the source of truth:
+
+    - a traveller whose id was already assigned in the brief being edited keeps it;
+    - anyone else (newly added, missing id, or an id we don't recognize) gets a
+      fresh id from the trip's monotonic counter, which never resets or reuses
+      a number freed up by a deleted traveller.
+    """
+    seen: set = set()
+    for traveller in brief.travellers:
+        if traveller.id and traveller.id in known_ids and traveller.id not in seen:
+            seen.add(traveller.id)
+            continue
+        trip.traveller_seq += 1
+        new_id = f"traveller_{trip.traveller_seq}"
+        traveller.id = new_id
+        seen.add(new_id)
     return brief
+
+
+def _known_traveller_ids(record: Optional[models.TripBriefRecord]) -> set:
+    if record is None:
+        return set()
+    travellers = record.structured_brief.get("travellers", [])
+    return {t["id"] for t in travellers if t.get("id")}
 
 
 def _get_trip_or_404(trip_id: str, db: Session) -> models.Trip:
@@ -88,7 +109,7 @@ def parse_trip(
     except LLMParseError as e:
         raise HTTPException(status_code=502, detail=f"Could not understand the trip request: {e}") from e
 
-    _assign_traveller_ids(brief)
+    _normalize_traveller_ids(trip, brief, known_ids=set())
 
     next_version = len(trip.briefs) + 1
     record = models.TripBriefRecord(
@@ -111,6 +132,9 @@ def update_trip_brief(trip_id: str, brief: TripBrief, db: Session = Depends(get_
         raise HTTPException(status_code=400, detail="no brief to update yet — call parse first")
     if latest.confirmed_at is not None:
         raise HTTPException(status_code=400, detail="brief already confirmed")
+
+    known_ids = _known_traveller_ids(latest)
+    _normalize_traveller_ids(trip, brief, known_ids)
 
     latest.structured_brief = brief.model_dump(mode="json")
     db.commit()

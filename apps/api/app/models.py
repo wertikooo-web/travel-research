@@ -22,6 +22,7 @@ class Trip(Base):
     public_slug = Column(String, unique=True, index=True, default=gen_uuid)
     status = Column(String, nullable=False, default="draft")
     currency = Column(String, nullable=True)
+    traveller_seq = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 

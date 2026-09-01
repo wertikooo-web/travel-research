@@ -108,3 +108,44 @@ def test_sparse_case_keeps_unknowns_null(client):
     assert brief["budget"] is None
     assert brief["hotel"] is None
     assert brief["travellers"][0]["travel_passport"] is None
+
+
+def test_traveller_ids_stable_and_unique_after_remove_and_add(client):
+    canned = TripBrief(
+        travellers=[
+            Traveller(type="adult", citizenships=["MD"], travel_passport="MD"),
+            Traveller(type="adult", citizenships=["RO"], travel_passport="RO"),
+            Traveller(type="adult", citizenships=["US"], travel_passport="US"),
+        ]
+    )
+    _use_llm(FakeLLMProvider(canned))
+    trip_id = client.post("/api/trips").json()["id"]
+
+    parsed = client.post(f"/api/trips/{trip_id}/parse", json={"raw_text": "3 travellers"}).json()
+    travellers = parsed["structured_brief"]["travellers"]
+    assert [t["id"] for t in travellers] == ["traveller_1", "traveller_2", "traveller_3"]
+
+    # remove traveller_2, add a brand new traveller the way the frontend does: no id at all
+    remaining = [t for t in travellers if t["id"] != "traveller_2"]
+    remaining.append({"type": "adult", "citizenships": ["FR"], "travel_passport": "FR"})
+
+    edited_brief = parsed["structured_brief"]
+    edited_brief["travellers"] = remaining
+    r = client.put(f"/api/trips/{trip_id}/brief", json=edited_brief)
+    assert r.status_code == 200
+
+    saved = r.json()["structured_brief"]["travellers"]
+    saved_ids = [t["id"] for t in saved]
+
+    assert len(saved_ids) == len(set(saved_ids)), "traveller ids must be unique"
+    assert "traveller_1" in saved_ids, "untouched traveller must keep its id"
+    assert "traveller_3" in saved_ids, "untouched traveller must keep its id"
+    assert "traveller_2" not in saved_ids, "removed traveller's id must not reappear"
+
+    new_ids = set(saved_ids) - {"traveller_1", "traveller_3"}
+    assert len(new_ids) == 1
+    (new_id,) = new_ids
+    assert new_id not in {"traveller_1", "traveller_2", "traveller_3"}, "new traveller must not reuse a freed id"
+
+    fr_traveller = next(t for t in saved if t["travel_passport"] == "FR")
+    assert fr_traveller["id"] == new_id
