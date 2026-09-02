@@ -144,14 +144,13 @@ export interface CandidateRun {
 
 export type FactStatus = "known" | "unknown" | "unavailable" | "conflicting" | "not_applicable";
 export type ComponentStatus = "pending" | "success" | "partial" | "failed" | "unknown";
-export type VisaStatus =
+export type EntryMethodType =
   | "visa_free"
   | "visa_on_arrival"
   | "evisa"
   | "electronic_authorization"
   | "visa_required"
-  | "entry_restricted"
-  | "unknown";
+  | "entry_restricted";
 
 export interface Evidence {
   id: string | null;
@@ -170,6 +169,13 @@ export interface FactResult<T> {
   value: T | null;
   evidence: Evidence[];
   note: string | null;
+  is_derived: boolean;
+}
+
+export interface EntryMethod {
+  method: EntryMethodType;
+  allowed_stay_days: number | null;
+  notes: string | null;
 }
 
 export interface DestinationIdentity {
@@ -195,8 +201,7 @@ export interface VisaResult {
   traveller_id: string;
   passport_country: string | null;
   destination_country: string | null;
-  status: FactResult<VisaStatus>;
-  allowed_stay_days: FactResult<number>;
+  entry_methods: FactResult<EntryMethod[]>;
   application_method: string | null;
   conditions: string[];
   checked_for_period: string | null;

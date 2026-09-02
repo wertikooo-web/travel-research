@@ -49,19 +49,26 @@ function FactRow({ label, fact, unit }: { label: string; fact: FactResult<number
 
 function VisaRow({ visa }: { visa: VisaResult }) {
   const flag = visa.passport_country ? `🛂 ${visa.passport_country}` : "🛂 паспорт неизвестен";
-  const evidence = visa.status.evidence[0];
+  const evidence = visa.entry_methods.evidence[0];
+  const methods = visa.entry_methods.status === "known" ? (visa.entry_methods.value ?? []) : [];
   return (
     <div className="rounded border border-gray-100 bg-gray-50 p-2 text-sm">
       <div className="flex items-center justify-between">
         <span className="font-medium text-gray-800">{flag}</span>
-        <span className={visa.status.status === "known" ? "text-gray-900" : "italic text-gray-400"}>
-          {visa.status.status === "known" ? VISA_STATUS_LABEL[visa.status.value ?? "unknown"] : "неизвестно"}
-        </span>
+        {methods.length === 0 && <span className="italic text-gray-400">неизвестно</span>}
       </div>
-      {visa.status.status === "known" && visa.allowed_stay_days.status === "known" && (
-        <div className="text-xs text-gray-500">до {visa.allowed_stay_days.value} дней</div>
+      {methods.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          {methods.map((m, i) => (
+            <div key={i} className="flex items-baseline justify-between text-gray-900">
+              <span>{VISA_STATUS_LABEL[m.method] ?? m.method}</span>
+              {m.allowed_stay_days != null && <span className="text-xs text-gray-500">до {m.allowed_stay_days} дней</span>}
+            </div>
+          ))}
+          {methods.length > 1 && <div className="text-xs text-gray-400">(источник указывает несколько вариантов)</div>}
+        </div>
       )}
-      {visa.status.note && <div className="text-xs text-gray-400">{visa.status.note}</div>}
+      {visa.entry_methods.note && <div className="text-xs text-gray-400">{visa.entry_methods.note}</div>}
       {evidence && (
         <div className="mt-1 text-xs text-gray-400">
           источник:{" "}

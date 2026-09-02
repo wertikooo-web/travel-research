@@ -12,10 +12,13 @@ Retrieval and classification are deliberately separate steps (section 17):
 1. fetch_visa_page(): one HTTP call, no interpretation.
 2. extract_country_row(): deterministic wikitext parsing — finds the row for
    the destination country. No LLM.
-3. classify_requirement(): deterministic keyword classification of the row's
-   requirement text. Falls back to a bounded LLM extraction (the row text
-   only, forced structured output) only when the keywords don't match
-   anything recognized — never asks the model what it "knows" from memory.
+3. classify_requirement_methods(): deterministic regex classification of the
+   row's requirement text into every distinct entry method it states (a
+   source can offer more than one, e.g. "visa on arrival/eVisa" — both are
+   kept, never collapsed to whichever keyword happens to match first).
+   Falls back to a bounded LLM extraction (the row text only, forced
+   structured output) only when nothing is recognized — never asks the
+   model what it "knows" from memory.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from typing import List, Optional, Protocol, Tuple
 
 import httpx
 
-from ..schemas import Evidence, FactResult, VisaResult, VisaStatus
+from ..schemas import EntryMethod, EntryMethodType, Evidence, FactResult, VisaResult
 from .country_names import country_name, demonym
 
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
@@ -45,7 +48,7 @@ class RowNotFoundError(Exception):
 
 
 class VisaExtractionProvider(Protocol):
-    def classify(self, requirement_text: str, allowed_stay_text: str, notes: str) -> Tuple[VisaStatus, Optional[int]]: ...
+    def classify(self, requirement_text: str, allowed_stay_text: str, notes: str) -> List[EntryMethodType]: ...
 
 
 async def fetch_visa_page(passport_country: str, client: httpx.AsyncClient) -> Tuple[str, str]:
@@ -132,29 +135,37 @@ def extract_country_row(wikitext: str, destination_country: str) -> dict:
     raise RowNotFoundError(f"{target_name!r} not found in the visa-requirements table")
 
 
-_KEYWORD_RULES: List[Tuple[str, VisaStatus]] = [
-    ("not required", "visa_free"),
-    ("not permitted", "entry_restricted"),
-    ("no admittance", "entry_restricted"),
-    ("banned", "entry_restricted"),
-    ("evisa", "evisa"),
-    ("e-visa", "evisa"),
-    ("electronic travel authoriz", "electronic_authorization"),
-    ("eta", "electronic_authorization"),
-    ("visa on arrival", "visa_on_arrival"),
-    ("on arrival", "visa_on_arrival"),
-    ("visa de facto not required", "visa_free"),
-    ("freedom of movement", "visa_free"),
-    ("required", "visa_required"),
+# Regex, not substring checks: a source line like "Visa not required" must
+# match visa_free ONLY, never also visa_required just because "required" is
+# a substring of "not required". Every entry gets checked — a composite
+# statement like "Visa on arrival/eVisa" is meant to match more than one
+# rule; normalization must preserve that, not collapse it to the first hit.
+_METHOD_PATTERNS: List[Tuple["re.Pattern[str]", EntryMethodType]] = [
+    (re.compile(r"\bnot required\b"), "visa_free"),
+    (re.compile(r"\bfreedom of movement\b"), "visa_free"),
+    (re.compile(r"\bnot permitted\b"), "entry_restricted"),
+    (re.compile(r"\bno admittance\b"), "entry_restricted"),
+    (re.compile(r"\bbanned\b"), "entry_restricted"),
+    (re.compile(r"\be-?visa\b"), "evisa"),
+    (re.compile(r"\belectronic travel authoriz\w*\b"), "electronic_authorization"),
+    (re.compile(r"\beta\b"), "electronic_authorization"),
+    (re.compile(r"\bvisa on arrival\b"), "visa_on_arrival"),
+    (re.compile(r"\bon arrival\b"), "visa_on_arrival"),
+    (re.compile(r"(?<!not )\brequired\b"), "visa_required"),
 ]
 
 
-def classify_requirement_deterministic(requirement_text: str) -> Optional[VisaStatus]:
+def classify_requirement_methods(requirement_text: str) -> List[EntryMethodType]:
+    """Every distinct entry method the source text actually states, in the
+    order its patterns are defined, deduplicated. Empty if nothing
+    recognized — the caller decides what to do next (LLM fallback, then
+    'unknown'), this function never guesses."""
     text = requirement_text.lower()
-    for keyword, status in _KEYWORD_RULES:
-        if keyword in text:
-            return status
-    return None
+    methods: List[EntryMethodType] = []
+    for pattern, method in _METHOD_PATTERNS:
+        if pattern.search(text) and method not in methods:
+            methods.append(method)
+    return methods
 
 
 def _parse_allowed_stay_days(text: str) -> Optional[int]:
@@ -174,7 +185,7 @@ async def research_visa(
             traveller_id=traveller_id,
             passport_country=passport_country,
             destination_country=None,
-            status=FactResult(status="unknown", note="destination country not resolved — cannot look up entry rules"),
+            entry_methods=FactResult(status="unknown", note="destination country not resolved — cannot look up entry rules"),
         )
 
     retrieved_at = datetime.now(timezone.utc).isoformat()
@@ -187,14 +198,14 @@ async def research_visa(
             traveller_id=traveller_id,
             passport_country=passport_country,
             destination_country=destination_country,
-            status=FactResult(status="unavailable", note=str(e)),
+            entry_methods=FactResult(status="unavailable", note=str(e)),
         )
     except RowNotFoundError as e:
         return VisaResult(
             traveller_id=traveller_id,
             passport_country=passport_country,
             destination_country=destination_country,
-            status=FactResult(status="unknown", note=str(e)),
+            entry_methods=FactResult(status="unknown", note=str(e)),
         )
 
     evidence = Evidence(
@@ -207,19 +218,19 @@ async def research_visa(
         confidence="medium",
     )
 
-    status = classify_requirement_deterministic(row["requirement_text"])
-    if status is None and extraction_provider is not None:
+    methods = classify_requirement_methods(row["requirement_text"])
+    if not methods and extraction_provider is not None:
         try:
-            status, _ = extraction_provider.classify(row["requirement_text"], row["allowed_stay_text"], row["notes"])
+            methods = extraction_provider.classify(row["requirement_text"], row["allowed_stay_text"], row["notes"])
         except Exception:
-            status = None
+            methods = []
 
-    if status is None:
+    if not methods:
         return VisaResult(
             traveller_id=traveller_id,
             passport_country=passport_country,
             destination_country=destination_country,
-            status=FactResult(
+            entry_methods=FactResult(
                 status="unknown",
                 evidence=[evidence],
                 note=f"could not classify requirement text: {row['requirement_text']!r}",
@@ -227,16 +238,15 @@ async def research_visa(
             conditions=[row["notes"]] if row["notes"] else [],
         )
 
+    # the source states one allowed-stay figure for the whole row, not one
+    # per method — applied to every method parsed from it, not split up
     allowed_stay = _parse_allowed_stay_days(row["allowed_stay_text"])
+    entry_method_objs = [EntryMethod(method=m, allowed_stay_days=allowed_stay) for m in methods]
+
     return VisaResult(
         traveller_id=traveller_id,
         passport_country=passport_country,
         destination_country=destination_country,
-        status=FactResult(status="known", value=status, evidence=[evidence]),
-        allowed_stay_days=(
-            FactResult(status="known", value=allowed_stay, evidence=[evidence])
-            if allowed_stay is not None
-            else FactResult(status="unknown", note="allowed-stay duration not stated in the source")
-        ),
+        entry_methods=FactResult(status="known", value=entry_method_objs, evidence=[evidence]),
         conditions=[row["notes"]] if row["notes"] else [],
     )

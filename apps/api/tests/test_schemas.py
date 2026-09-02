@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import DestinationPick, Evidence, FactResult, Dates, Traveller, TripBrief
+from app.schemas import DestinationPick, EntryMethod, Evidence, FactResult, Dates, Traveller, TripBrief, VisaResult
 
 
 def test_brief_defaults_to_empty_not_invented():
@@ -84,12 +84,59 @@ def test_fact_result_unknown_has_no_value_and_no_evidence():
 
 
 def test_fact_result_known_is_distinguishable_from_unknown():
-    known = FactResult(status="known", value=False)
+    ev = Evidence(source_type="weather_provider", provider="Open-Meteo", retrieved_at="2026-01-01T00:00:00Z")
+    known = FactResult(status="known", value=False, evidence=[ev])
     unknown = FactResult(status="unknown")
     # "verified false" must never look like "we don't know" — the whole point of FactResult
     assert known.status != unknown.status
     assert known.value is False
     assert unknown.value is None
+
+
+def test_fact_result_known_sourced_fact_requires_evidence():
+    with pytest.raises(ValidationError):
+        FactResult(status="known", value=1)  # no evidence and not marked derived
+
+
+def test_fact_result_known_derived_fact_does_not_require_evidence():
+    fact = FactResult(status="known", value=1, is_derived=True)
+    assert fact.value == 1
+    assert fact.evidence == []
+
+
+def test_fact_result_known_requires_a_value():
+    with pytest.raises(ValidationError):
+        FactResult(status="known", is_derived=True)  # no value at all
+
+
+def test_fact_result_unknown_must_not_carry_a_value():
+    with pytest.raises(ValidationError):
+        FactResult(status="unknown", value=1)
+
+
+def test_fact_result_conflicting_requires_evidence():
+    with pytest.raises(ValidationError):
+        FactResult(status="conflicting")
+
+    ev = Evidence(source_type="secondary_travel_site", provider="Wikipedia", retrieved_at="2026-01-01T00:00:00Z")
+    conflicting = FactResult(status="conflicting", evidence=[ev], note="two sources disagree")
+    assert conflicting.evidence == [ev]
+
+
+def test_visa_result_can_hold_multiple_distinct_entry_methods():
+    ev = Evidence(source_type="secondary_travel_site", provider="Wikipedia", retrieved_at="2026-01-01T00:00:00Z")
+    vr = VisaResult(
+        traveller_id="t1",
+        passport_country="MD",
+        destination_country="EG",
+        entry_methods=FactResult(
+            status="known",
+            value=[EntryMethod(method="visa_on_arrival", allowed_stay_days=30), EntryMethod(method="evisa", allowed_stay_days=30)],
+            evidence=[ev],
+        ),
+    )
+    methods = {m.method for m in vr.entry_methods.value}
+    assert methods == {"visa_on_arrival", "evisa"}, "a composite source statement must not collapse to one method"
 
 
 def test_evidence_requires_source_type_and_provider():

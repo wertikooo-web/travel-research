@@ -30,7 +30,7 @@ def _traveller_passports(traveller) -> List[str]:
 def _aggregate_visa_status(visa_results: List[VisaResult]) -> str:
     if not visa_results:
         return "unknown"
-    statuses = {v.status.status for v in visa_results}
+    statuses = {v.entry_methods.status for v in visa_results}
     if statuses == {"known"}:
         return "success"
     if "known" in statuses:
@@ -89,7 +89,7 @@ async def research_candidate(
                     traveller_id=traveller.id or "unknown",
                     passport_country=None,
                     destination_country=dest_code,
-                    status=FactResult(status="unknown", note="no passport/citizenship information for this traveller"),
+                    entry_methods=FactResult(status="unknown", note="no passport/citizenship information for this traveller"),
                 )
             )
             result.warnings.append(f"{traveller.id}: no passport info — visa left unknown, not inferred")
@@ -102,7 +102,7 @@ async def research_candidate(
                     traveller_id=traveller.id or "unknown",
                     passport_country=passport,
                     destination_country=dest_code,
-                    status=FactResult(status="unavailable", note=f"visa research error: {e}"),
+                    entry_methods=FactResult(status="unavailable", note=f"visa research error: {e}"),
                 )
             visa_results.append(vr)
 

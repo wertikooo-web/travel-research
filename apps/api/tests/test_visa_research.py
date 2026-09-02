@@ -6,8 +6,7 @@ import pytest
 from app.llm.visa_extraction_provider import FakeVisaExtractionProvider
 from app.research.visa import (
     RowNotFoundError,
-    VisaSourceError,
-    classify_requirement_deterministic,
+    classify_requirement_methods,
     extract_country_row,
     research_visa,
 )
@@ -79,7 +78,6 @@ def test_extract_country_row_falls_back_to_plain_text_when_no_yes_no_template():
     # ("Visa on arrival/eVisa") instead of wrapping it in {{yes|...}}
     row = extract_country_row(SAMPLE_WIKITEXT, "BG")
     assert row["requirement_text"] == "Visa on arrival/eVisa"
-    assert classify_requirement_deterministic(row["requirement_text"]) == "evisa"
 
 
 def test_extract_country_row_does_not_match_a_template_from_a_different_cell():
@@ -88,7 +86,6 @@ def test_extract_country_row_does_not_match_a_template_from_a_different_cell():
     # a template (`{{Optional|...}}`) the yes/yes2/no regex doesn't cover
     row = extract_country_row(SAMPLE_WIKITEXT, "JO")
     assert row["requirement_text"] == "eVisa / Visa on arrival"
-    assert classify_requirement_deterministic(row["requirement_text"]) == "evisa"
 
 
 def test_extract_country_row_not_found_raises():
@@ -101,23 +98,52 @@ def test_extract_country_row_unmapped_country_code_raises():
         extract_country_row(SAMPLE_WIKITEXT, "XX")  # no English name known for this code
 
 
+# --- composite entry methods: the core of this correctness pass -------------
+# A source stating two valid options ("visa on arrival/eVisa") must produce
+# both methods, in either phrasing order — not whichever keyword a scan
+# happens to hit first, and not silently merged into one.
+
+
+def test_classify_composite_visa_on_arrival_slash_evisa():
+    methods = classify_requirement_methods("Visa on arrival/eVisa")
+    assert set(methods) == {"visa_on_arrival", "evisa"}
+
+
+def test_classify_composite_evisa_slash_visa_on_arrival_order_reversed():
+    methods = classify_requirement_methods("eVisa / Visa on arrival")
+    assert set(methods) == {"visa_on_arrival", "evisa"}
+
+
+def test_classify_simple_visa_free():
+    assert classify_requirement_methods("Visa not required") == ["visa_free"]
+
+
+def test_classify_simple_visa_required():
+    assert classify_requirement_methods("Visa required") == ["visa_required"]
+
+
+def test_classify_visa_not_required_does_not_also_match_visa_required():
+    # "required" is a substring of "not required" — a naive substring check
+    # would wrongly add visa_required here too
+    methods = classify_requirement_methods("Visa not required")
+    assert "visa_required" not in methods
+
+
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("Visa not required", "visa_free"),
-        ("eVisa", "evisa"),
-        ("Visa on arrival", "visa_on_arrival"),
-        ("Electronic Travel Authorization required", "electronic_authorization"),
-        ("Visa required", "visa_required"),
-        ("Not permitted", "entry_restricted"),
+        ("eVisa", ["evisa"]),
+        ("Visa on arrival", ["visa_on_arrival"]),
+        ("Electronic Travel Authorization required", ["electronic_authorization", "visa_required"]),
+        ("Not permitted", ["entry_restricted"]),
     ],
 )
-def test_classify_requirement_deterministic_known_phrasings(text, expected):
-    assert classify_requirement_deterministic(text) == expected
+def test_classify_requirement_methods_known_phrasings(text, expected):
+    assert set(classify_requirement_methods(text)) == set(expected)
 
 
-def test_classify_requirement_deterministic_unknown_phrasing_returns_none():
-    assert classify_requirement_deterministic("Something unusual and unclassifiable") is None
+def test_classify_requirement_methods_unknown_phrasing_returns_empty_list():
+    assert classify_requirement_methods("Something unusual and unclassifiable") == []
 
 
 def _mock_transport(wikitext=SAMPLE_WIKITEXT, http_status=200):
@@ -129,18 +155,31 @@ def _mock_transport(wikitext=SAMPLE_WIKITEXT, http_status=200):
     return httpx.MockTransport(handler)
 
 
-def test_research_visa_known_status_with_evidence():
+def test_research_visa_single_method_known_with_evidence():
     async def run():
         async with httpx.AsyncClient(transport=_mock_transport()) as client:
             return await research_visa("t1", "MD", "TH", client)
 
     result = asyncio.run(run())
-    assert result.status.status == "known"
-    assert result.status.value == "evisa"
-    assert result.allowed_stay_days.value == 30
-    assert len(result.status.evidence) == 1
-    assert result.status.evidence[0].source_type == "secondary_travel_site"
-    assert result.status.evidence[0].confidence == "medium"
+    assert result.entry_methods.status == "known"
+    assert [m.method for m in result.entry_methods.value] == ["evisa"]
+    assert result.entry_methods.value[0].allowed_stay_days == 30
+    assert len(result.entry_methods.evidence) == 1
+    assert result.entry_methods.evidence[0].source_type == "secondary_travel_site"
+    assert result.entry_methods.evidence[0].confidence == "medium"
+
+
+def test_research_visa_composite_methods_both_preserved():
+    async def run():
+        async with httpx.AsyncClient(transport=_mock_transport()) as client:
+            return await research_visa("t1", "MD", "BG", client)
+
+    result = asyncio.run(run())
+    assert result.entry_methods.status == "known"
+    methods = {m.method for m in result.entry_methods.value}
+    assert methods == {"visa_on_arrival", "evisa"}
+    # both real, materially distinct options — not collapsed to one
+    assert len(result.entry_methods.value) == 2
 
 
 def test_research_visa_row_not_found_is_unknown_not_a_crash():
@@ -149,7 +188,7 @@ def test_research_visa_row_not_found_is_unknown_not_a_crash():
             return await research_visa("t1", "MD", "JP", client)
 
     result = asyncio.run(run())
-    assert result.status.status == "unknown"
+    assert result.entry_methods.status == "unknown"
 
 
 def test_research_visa_source_unavailable_on_fetch_failure():
@@ -158,7 +197,7 @@ def test_research_visa_source_unavailable_on_fetch_failure():
             return await research_visa("t1", "MD", "TH", client)
 
     result = asyncio.run(run())
-    assert result.status.status == "unavailable"
+    assert result.entry_methods.status == "unavailable"
 
 
 def test_research_visa_no_passport_mapping_is_unavailable_never_llm_memory():
@@ -167,7 +206,7 @@ def test_research_visa_no_passport_mapping_is_unavailable_never_llm_memory():
             return await research_visa("t1", "ZZ", "TH", client)  # no demonym configured
 
     result = asyncio.run(run())
-    assert result.status.status == "unavailable"
+    assert result.entry_methods.status == "unavailable"
 
 
 def test_research_visa_no_destination_country_is_unknown():
@@ -176,11 +215,11 @@ def test_research_visa_no_destination_country_is_unknown():
             return await research_visa("t1", "MD", None, client)
 
     result = asyncio.run(run())
-    assert result.status.status == "unknown"
+    assert result.entry_methods.status == "unknown"
 
 
 def test_llm_fallback_used_only_when_deterministic_classification_fails():
-    fake_llm = FakeVisaExtractionProvider(result=("visa_free", 60))
+    fake_llm = FakeVisaExtractionProvider(result=["visa_free"])
 
     from app.research import country_names
 
@@ -196,5 +235,5 @@ def test_llm_fallback_used_only_when_deterministic_classification_fails():
         del country_names.ISO2_TO_COUNTRY_NAME["ZZ"]
 
     assert len(fake_llm.calls) == 1
-    assert result.status.status == "known"
-    assert result.status.value == "visa_free"
+    assert result.entry_methods.status == "known"
+    assert [m.method for m in result.entry_methods.value] == ["visa_free"]

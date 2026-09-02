@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 TravellerType = Literal["adult", "child"]
 PassportType = Literal["biometric", "ordinary", "other"]
@@ -241,14 +241,16 @@ EvidenceSourceType = Literal[
 EvidenceConfidence = Literal["high", "medium", "low"]
 ComponentStatus = Literal["pending", "success", "partial", "failed", "unknown"]
 WeatherPeriodBasis = Literal["forecast", "historical_climate", "historical_observation"]
-VisaStatus = Literal[
+
+# Every value a source can state a traveller actually gets, not a status of
+# our confidence — "we don't know" lives in FactResult.status, never here.
+EntryMethodType = Literal[
     "visa_free",
     "visa_on_arrival",
     "evisa",
     "electronic_authorization",
     "visa_required",
     "entry_restricted",
-    "unknown",
 ]
 
 
@@ -273,10 +275,50 @@ ResearchValueT = TypeVar("ResearchValueT")
 
 
 class FactResult(BaseModel, Generic[ResearchValueT]):
+    """The one wrapper every research fact goes through. Structurally
+    enforced, not just conventional:
+
+    - `known` always has a value.
+    - `known` AND sourced (`is_derived=False`, the default) always has
+      evidence — "no source, no verified fact" is unenforceable as a
+      convention, so it's enforced here instead.
+    - `unknown` / `unavailable` / `not_applicable` never carry a value —
+      "we don't know" must never be representable as a fact that happens to
+      equal the right answer.
+    - `conflicting` always carries the evidence responsible for the
+      conflict (that's the whole point of the state).
+
+    `is_derived=True` is the deliberate escape hatch for a future fact
+    computed from other already-evidenced FactResults (e.g. a scoring
+    layer's rollup) — it doesn't need its own fresh external source, since
+    its truth traces through inputs that already carry theirs. Without this
+    flag every derived value would need to fake a source to pass validation,
+    which would be worse than not validating at all.
+    """
+
     status: FactStatus
     value: Optional[ResearchValueT] = None
     evidence: List[Evidence] = Field(default_factory=list)
     note: Optional[str] = None
+    is_derived: bool = False
+
+    @model_validator(mode="after")
+    def _enforce_evidence_invariant(self):
+        if self.status == "known":
+            if self.value is None:
+                raise ValueError("a 'known' FactResult must have a value")
+            if not self.is_derived and not self.evidence:
+                raise ValueError(
+                    "a 'known' sourced FactResult must carry evidence (no source, no verified fact) — "
+                    "set is_derived=True if this is computed from other already-evidenced facts"
+                )
+        elif self.status in ("unknown", "unavailable", "not_applicable"):
+            if self.value is not None:
+                raise ValueError(f"a '{self.status}' FactResult must not carry a value")
+        elif self.status == "conflicting":
+            if not self.evidence:
+                raise ValueError("a 'conflicting' FactResult must carry the evidence responsible for the conflict")
+        return self
 
 
 def _unknown_fact() -> FactResult:
@@ -311,16 +353,31 @@ class WeatherFacts(BaseModel):
     rainy_day_ratio: FactResult[float] = Field(default_factory=_unknown_fact)
 
 
+class EntryMethod(BaseModel):
+    """One valid way to enter — a source often states more than one at once
+    ("visa on arrival / eVisa"), and that's materially different information
+    from either option alone. Never collapse a source's options down to a
+    single value just because the field used to only hold one."""
+
+    method: EntryMethodType
+    allowed_stay_days: Optional[int] = None
+    notes: Optional[str] = None
+
+
 class VisaResult(BaseModel):
     """Visa status belongs to destination + traveller + passport + travel
     period — never to the trip as a whole. One of these per passport a
-    traveller actually holds, never collapsed into a single group verdict."""
+    traveller actually holds, never collapsed into a single group verdict.
+
+    `entry_methods` holds every distinct option the source actually states,
+    not just the first one a keyword scan happens to hit — a group-level
+    scoring layer later can pick "the easiest available method" itself
+    without this layer having pre-decided and discarded the alternatives."""
 
     traveller_id: str
     passport_country: Optional[str] = None  # null only when the traveller's passport itself is unknown
     destination_country: Optional[str] = None
-    status: FactResult[VisaStatus] = Field(default_factory=_unknown_fact)
-    allowed_stay_days: FactResult[int] = Field(default_factory=_unknown_fact)
+    entry_methods: FactResult[List[EntryMethod]] = Field(default_factory=_unknown_fact)
     application_method: Optional[str] = None
     conditions: List[str] = Field(default_factory=list)
     checked_for_period: Optional[str] = None

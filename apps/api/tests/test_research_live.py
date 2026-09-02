@@ -50,10 +50,10 @@ def test_case_a_eu_beach_destination_fully_researched():
     assert result.weather.day_temp_c.evidence[0].url  # a real, checkable URL
 
     md_visa = result.visa_results[0]
-    assert md_visa.status.status in ("known", "unknown", "unavailable")
-    if md_visa.status.status == "known":
-        assert md_visa.status.evidence[0].source_type == "secondary_travel_site"
-        assert "wikipedia.org" in md_visa.status.evidence[0].url
+    assert md_visa.entry_methods.status in ("known", "unknown", "unavailable")
+    if md_visa.entry_methods.status == "known":
+        assert md_visa.entry_methods.evidence[0].source_type == "secondary_travel_site"
+        assert "wikipedia.org" in md_visa.entry_methods.evidence[0].url
 
 
 def test_case_b_non_eu_beach_destination_thailand():
@@ -87,8 +87,10 @@ def test_case_c_md_vs_ro_passport_diverge_for_the_same_destination():
 
     md = next(v for v in result.visa_results if v.passport_country == "MD")
     ro = next(v for v in result.visa_results if v.passport_country == "RO")
-    assert md.status.status == "known" and ro.status.status == "known"
-    assert md.status.value != ro.status.value, "MD and RO are expected to genuinely differ for Thailand"
+    assert md.entry_methods.status == "known" and ro.entry_methods.status == "known"
+    md_methods = {m.method for m in md.entry_methods.value}
+    ro_methods = {m.method for m in ro.entry_methods.value}
+    assert md_methods != ro_methods, "MD and RO are expected to genuinely differ for Thailand"
 
 
 def test_case_d_missing_passport_never_inferred_from_origin():
@@ -103,8 +105,27 @@ def test_case_d_missing_passport_never_inferred_from_origin():
     result = _run(candidate, brief)
 
     assert len(result.visa_results) == 1
-    assert result.visa_results[0].status.status == "unknown"
+    assert result.visa_results[0].entry_methods.status == "unknown"
     assert result.visa_results[0].passport_country is None
+
+
+def test_case_f_real_composite_entry_methods_both_preserved():
+    """A real source stating more than one valid entry method must come back
+    with both — not whichever keyword a naive scan hits first. Egypt's row
+    on the Moldovan-citizens page states "Visa on arrival/eVisa"."""
+    candidate = Candidate(
+        id="c1", destination_name="Hurghada", country_code="EG", reason_to_check="x", source="llm", candidate_category="core"
+    )
+    brief = TripBrief(
+        dates=Dates(month=10),
+        travellers=[Traveller(id="t1", type="adult", citizenships=["MD"], travel_passport="MD")],
+    )
+    result = _run(candidate, brief)
+
+    md_visa = result.visa_results[0]
+    assert md_visa.entry_methods.status == "known"
+    methods = {m.method for m in md_visa.entry_methods.value}
+    assert methods == {"visa_on_arrival", "evisa"}, f"expected both real options preserved, got {methods}"
 
 
 def test_case_e_partial_dates_use_historical_climate_not_invented_exact_dates():

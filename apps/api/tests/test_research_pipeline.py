@@ -86,8 +86,8 @@ def test_full_success_all_components():
     assert result.basics_status == "success"
     assert result.weather_status == "success"
     assert result.visa_status == "success"
-    assert result.visa_results[0].status.status == "known"
-    assert result.visa_results[0].status.value == "evisa"
+    assert result.visa_results[0].entry_methods.status == "known"
+    assert [m.method for m in result.visa_results[0].entry_methods.value] == ["evisa"]
 
 
 def test_weather_failure_does_not_sink_basics_or_visa():
@@ -120,7 +120,7 @@ def test_visa_source_failure_does_not_sink_basics_or_weather():
     result = asyncio.run(run())
     assert result.basics_status == "success"
     assert result.weather_status == "success"
-    assert result.visa_results[0].status.status == "unavailable"
+    assert result.visa_results[0].entry_methods.status == "unavailable"
 
 
 def test_missing_passport_is_unknown_not_inferred_and_does_not_crash():
@@ -135,7 +135,7 @@ def test_missing_passport_is_unknown_not_inferred_and_does_not_crash():
 
     result = asyncio.run(run())
     assert len(result.visa_results) == 1
-    assert result.visa_results[0].status.status == "unknown"
+    assert result.visa_results[0].entry_methods.status == "unknown"
     assert result.visa_results[0].passport_country is None
     assert any("no passport info" in w for w in result.warnings)
 
@@ -157,9 +157,11 @@ def test_mixed_travellers_get_independent_visa_results():
     assert len(result.visa_results) == 2
     md_result = next(v for v in result.visa_results if v.passport_country == "MD")
     ro_result = next(v for v in result.visa_results if v.passport_country == "RO")
-    assert md_result.status.value == "evisa"  # MD needs eVisa for Thailand
-    assert ro_result.status.value == "visa_free"  # RO doesn't
-    assert md_result.status.value != ro_result.status.value  # no global trip-level shortcut
+    md_methods = [m.method for m in md_result.entry_methods.value]
+    ro_methods = [m.method for m in ro_result.entry_methods.value]
+    assert md_methods == ["evisa"]  # MD needs eVisa for Thailand
+    assert ro_methods == ["visa_free"]  # RO doesn't
+    assert md_methods != ro_methods  # no global trip-level shortcut
 
 
 def test_dual_passport_traveller_gets_a_result_per_passport():
