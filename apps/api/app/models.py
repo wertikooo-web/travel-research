@@ -41,6 +41,11 @@ class Trip(Base):
         back_populates="trip",
         order_by="ResearchRun.version",
     )
+    flight_runs = relationship(
+        "FlightRun",
+        back_populates="trip",
+        order_by="FlightRun.version",
+    )
 
 
 class TripBriefRecord(Base):
@@ -108,3 +113,33 @@ class ResearchRun(Base):
     completed_at = Column(DateTime, nullable=True)
 
     trip = relationship("Trip", back_populates="research_runs")
+
+
+class FlightRun(Base):
+    """One flight-search pass over a ResearchRun's resolved destinations.
+
+    Depends on candidate_run_id (which candidates) AND research_run_id
+    (whose DestinationIdentity to resolve transport places from) — flight
+    place resolution consumes M3's geocoded identity, not the raw candidate
+    name. Same immutability contract as CandidateRun/ResearchRun: a rerun is
+    version N+1, and yesterday's now-expired offers stay exactly as
+    retrieved in version N — they're a historical snapshot, not something a
+    rerun is allowed to erase.
+    """
+
+    __tablename__ = "flight_runs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    trip_id = Column(String, ForeignKey("trips.id"), nullable=False)
+    candidate_run_id = Column(String, ForeignKey("candidate_runs.id"), nullable=False)
+    research_run_id = Column(String, ForeignKey("research_runs.id"), nullable=False)
+    brief_id = Column(String, ForeignKey("trip_briefs.id"), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False, default="pending")  # pending|completed|partial|failed
+    results = Column(JSON, nullable=True)  # List[DestinationFlightResearch]
+    warnings = Column(JSON, nullable=True)
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    trip = relationship("Trip", back_populates="flight_runs")

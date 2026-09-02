@@ -233,6 +233,104 @@ export interface ResearchRun {
   completed_at: string | null;
 }
 
+// --- Flight research (Milestone 4) -------------------------------------------
+
+export type FlightPlaceType = "airport" | "city";
+export type FlightPassengerType = "adult" | "child" | "infant_without_seat";
+export type DateVariant = "exact" | "flex_early" | "flex_center" | "flex_late";
+export type ConnectionPolicy = "direct_required" | "direct_preferred" | "max_connections_constraint" | "unspecified";
+
+export interface TransportPlace {
+  iata_code: string;
+  type: FlightPlaceType;
+  name: string;
+  country_code: string | null;
+  alternate_iata_codes: string[];
+}
+
+export interface FlightPassenger {
+  traveller_id: string;
+  type: FlightPassengerType;
+  age: number | null;
+}
+
+export interface FlightSearchPlan {
+  origin: TransportPlace;
+  destination: TransportPlace;
+  outbound_date: string;
+  return_date: string;
+  nights: number;
+  date_variant: DateVariant;
+  passengers: FlightPassenger[];
+  cabin: string;
+  max_connections_sent: number;
+  connection_policy: ConnectionPolicy;
+}
+
+export interface FlightSegment {
+  origin_iata: string;
+  destination_iata: string;
+  departing_at: string;
+  arriving_at: string;
+  operating_carrier: string | null;
+  marketing_carrier: string | null;
+  duration_minutes: number | null;
+}
+
+export interface FlightItinerary {
+  segments: FlightSegment[];
+  duration_minutes: number | null;
+  connections: number;
+}
+
+export interface FlightOffer {
+  id: string;
+  outbound: FlightItinerary;
+  return_: FlightItinerary | null;
+  total_amount: number;
+  total_currency: string;
+  traveller_count: number;
+  cabin: string | null;
+  retrieved_at: string;
+  expires_at: string | null;
+}
+
+export interface FlightSearchOutcome {
+  plan: FlightSearchPlan;
+  status: ComponentStatus;
+  offers: FlightOffer[];
+  evidence: Evidence | null;
+  error: string | null;
+  note: string | null;
+}
+
+export interface DestinationFlightResearch {
+  candidate_id: string;
+  origin_place: TransportPlace | null;
+  destination_place: TransportPlace | null;
+  resolution_status: ComponentStatus;
+  date_status: ComponentStatus;
+  searches: FlightSearchOutcome[];
+  overall_status: ComponentStatus;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface FlightRun {
+  id: string;
+  trip_id: string;
+  candidate_run_id: string;
+  research_run_id: string;
+  brief_id: string;
+  version: number;
+  status: "pending" | "completed" | "partial" | "failed";
+  results: DestinationFlightResearch[];
+  warnings: string[];
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
 export function emptyTripBrief(): TripBrief {
   return {
     travellers: [],

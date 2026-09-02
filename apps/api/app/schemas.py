@@ -407,3 +407,122 @@ class ResearchRunSummary(BaseModel):
     error: Optional[str] = None
     created_at: str
     completed_at: Optional[str] = None
+
+
+# --- Flight research (Milestone 4) -------------------------------------------
+#
+# The LLM has no role in this path at all. A TransportPlace is resolved from
+# Duffel's own structured place data — never a raw (possibly Cyrillic, always
+# LLM-authored) Candidate.destination_name. A FlightSearchPlan is what we
+# actually asked the provider, persisted so "what did we ask Duffel?" is
+# always answerable. Flight prices are snapshots (retrieved_at/expires_at),
+# never timeless facts.
+
+FlightPlaceType = Literal["airport", "city"]
+FlightPassengerType = Literal["adult", "child", "infant_without_seat"]
+DateVariant = Literal["exact", "flex_early", "flex_center", "flex_late"]
+ConnectionPolicy = Literal["direct_required", "direct_preferred", "max_connections_constraint", "unspecified"]
+
+
+class TransportPlace(BaseModel):
+    """A resolved Duffel airport or city — never a raw candidate display
+    name. `iata_code` is the single code actually searched this milestone;
+    `alternate_iata_codes` is preserved for a future routing layer, not
+    fanned out into extra searches now."""
+
+    iata_code: str
+    type: FlightPlaceType
+    name: str
+    country_code: Optional[str] = None
+    alternate_iata_codes: List[str] = Field(default_factory=list)
+
+
+class FlightPassenger(BaseModel):
+    traveller_id: str
+    type: FlightPassengerType
+    age: Optional[int] = None
+
+
+class FlightSearchPlan(BaseModel):
+    origin: TransportPlace
+    destination: TransportPlace
+    outbound_date: date
+    return_date: date
+    nights: int
+    date_variant: DateVariant
+    passengers: List[FlightPassenger]
+    cabin: Cabin
+    max_connections_sent: int
+    connection_policy: ConnectionPolicy
+
+
+class FlightSegment(BaseModel):
+    origin_iata: str
+    destination_iata: str
+    departing_at: str
+    arriving_at: str
+    operating_carrier: Optional[str] = None
+    marketing_carrier: Optional[str] = None
+    duration_minutes: Optional[int] = None
+
+
+class FlightItinerary(BaseModel):
+    segments: List[FlightSegment] = Field(default_factory=list)
+    duration_minutes: Optional[int] = None
+    connections: int = 0
+
+
+class FlightOffer(BaseModel):
+    """Normalized product data only — raw Duffel JSON never reaches this
+    model or anything downstream of it."""
+
+    id: str
+    outbound: FlightItinerary
+    return_: Optional[FlightItinerary] = None
+    total_amount: float
+    total_currency: str
+    traveller_count: int
+    cabin: Optional[Cabin] = None
+    retrieved_at: str
+    expires_at: Optional[str] = None
+
+
+class FlightSearchOutcome(BaseModel):
+    """One executed (or explicitly skipped) search for one plan. Zero offers
+    on a successful response and a failed/timed-out request are different
+    `status` values, never conflated — "no offers for this exact search" is
+    not the same claim as "the provider failed"."""
+
+    plan: FlightSearchPlan
+    status: ComponentStatus = "pending"
+    offers: List[FlightOffer] = Field(default_factory=list)
+    evidence: Optional[Evidence] = None
+    error: Optional[str] = None
+    note: Optional[str] = None
+
+
+class DestinationFlightResearch(BaseModel):
+    candidate_id: str
+    origin_place: Optional[TransportPlace] = None
+    destination_place: Optional[TransportPlace] = None
+    resolution_status: ComponentStatus = "pending"
+    date_status: ComponentStatus = "pending"
+    searches: List[FlightSearchOutcome] = Field(default_factory=list)
+    overall_status: ComponentStatus = "pending"
+    warnings: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+
+
+class FlightRunSummary(BaseModel):
+    id: str
+    trip_id: str
+    candidate_run_id: str
+    research_run_id: str
+    brief_id: str
+    version: int
+    status: Literal["pending", "completed", "partial", "failed"]
+    results: List[DestinationFlightResearch] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    created_at: str
+    completed_at: Optional[str] = None

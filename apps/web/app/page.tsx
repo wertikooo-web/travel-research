@@ -3,10 +3,20 @@
 import { useState } from "react";
 import BriefConfirmation from "@/components/BriefConfirmation";
 import CandidateList from "@/components/CandidateList";
+import FlightResearchView from "@/components/FlightResearchView";
 import ResearchView from "@/components/ResearchView";
 import TripInputForm from "@/components/TripInputForm";
-import { ApiError, confirmBrief, createTrip, generateCandidates, generateResearch, parseTrip, updateBrief } from "@/lib/api";
-import type { BriefRecord, CandidateRun, ResearchRun, TripBrief, TripHints } from "@/lib/types";
+import {
+  ApiError,
+  confirmBrief,
+  createTrip,
+  generateCandidates,
+  generateFlights,
+  generateResearch,
+  parseTrip,
+  updateBrief,
+} from "@/lib/api";
+import type { BriefRecord, CandidateRun, FlightRun, ResearchRun, TripBrief, TripHints } from "@/lib/types";
 
 type Stage = "input" | "confirm" | "confirmed";
 
@@ -26,6 +36,10 @@ export default function Home() {
   const [researchRun, setResearchRun] = useState<ResearchRun | null>(null);
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
+
+  const [flightRun, setFlightRun] = useState<FlightRun | null>(null);
+  const [flightsLoading, setFlightsLoading] = useState(false);
+  const [flightsError, setFlightsError] = useState<string | null>(null);
 
   async function handleSubmit(text: string, hints: TripHints | undefined) {
     setLoading(true);
@@ -75,6 +89,8 @@ export default function Home() {
     setCandidatesError(null);
     setResearchRun(null);
     setResearchError(null);
+    setFlightRun(null);
+    setFlightsError(null);
   }
 
   async function handleGenerateCandidates() {
@@ -102,6 +118,20 @@ export default function Home() {
       setResearchError(e instanceof ApiError ? e.message : "Не удалось собрать данные по направлениям. Попробуйте ещё раз.");
     } finally {
       setResearchLoading(false);
+    }
+  }
+
+  async function handleGenerateFlights() {
+    if (!tripId) return;
+    setFlightsLoading(true);
+    setFlightsError(null);
+    try {
+      const run = await generateFlights(tripId);
+      setFlightRun(run);
+    } catch (e) {
+      setFlightsError(e instanceof ApiError ? e.message : "Не удалось найти рейсы. Попробуйте ещё раз.");
+    } finally {
+      setFlightsLoading(false);
     }
   }
 
@@ -189,6 +219,32 @@ export default function Home() {
                     Собранные факты · run v{researchRun.version} ({researchRun.status})
                   </h2>
                   <ResearchView results={researchRun.results} candidates={candidateRun.candidates} runWarnings={researchRun.warnings} />
+                </div>
+              )}
+
+              {researchRun && researchRun.results.length > 0 && (
+                <div className="flex flex-col gap-4 border-t border-gray-200 pt-4">
+                  <button
+                    type="button"
+                    onClick={handleGenerateFlights}
+                    disabled={flightsLoading}
+                    className="self-start rounded-lg bg-blue-600 px-6 py-3 text-base font-medium text-white hover:bg-blue-700 disabled:bg-gray-300"
+                  >
+                    {flightsLoading ? "Ищем рейсы…" : "Найти рейсы"}
+                  </button>
+
+                  {flightsError && (
+                    <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{flightsError}</div>
+                  )}
+
+                  {flightRun && (
+                    <div>
+                      <h2 className="mb-3 text-lg font-semibold text-gray-900">
+                        Рейсы · run v{flightRun.version} ({flightRun.status})
+                      </h2>
+                      <FlightResearchView results={flightRun.results} candidates={candidateRun.candidates} runWarnings={flightRun.warnings} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

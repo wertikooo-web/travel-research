@@ -39,6 +39,50 @@ def test_basics_no_results_raises_not_a_guess():
         asyncio.run(run())
 
 
+def test_basics_falls_back_to_country_centroid_when_name_not_indexed():
+    # e.g. an LLM-generated Cyrillic destination name Open-Meteo's index has
+    # nothing for — losing the whole identity is worse than a coarser,
+    # still-sourced country-centroid fallback
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = httpx.QueryParams(request.url.query).get("name")
+        calls.append(name)
+        if name == "Egypt":
+            return httpx.Response(
+                200,
+                json={"results": [{"name": "Egypt", "latitude": 26.0, "longitude": 30.0, "country_code": "EG", "country": "Egypt"}]},
+            )
+        return httpx.Response(200, json={"results": []})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await research_destination_basics("Египет", "EG", client)
+
+    identity, evidence = asyncio.run(run())
+    assert calls == ["Египет", "Egypt"]  # tried the given name first, then the country fallback
+    assert identity.country_code == "EG"
+    assert identity.coordinates.lat == 26.0
+    assert evidence.confidence == "medium"  # coarser than a direct match, not silently "high"
+    assert "fallback" in evidence.title.lower()
+
+
+def test_basics_no_country_code_means_no_fallback_attempted():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(httpx.QueryParams(request.url.query).get("name"))
+        return httpx.Response(200, json={"results": []})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await research_destination_basics("Египет", None, client)
+
+    with pytest.raises(DestinationBasicsError):
+        asyncio.run(run())
+    assert calls == ["Египет"]  # no country_code to fall back with — one attempt only
+
+
 def test_basics_http_failure_raises():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)

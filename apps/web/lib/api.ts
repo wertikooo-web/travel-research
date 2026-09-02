@@ -1,4 +1,4 @@
-import type { BriefRecord, CandidateRun, ResearchRun, TripBrief, TripHints } from "./types";
+import type { BriefRecord, CandidateRun, FlightRun, ResearchRun, TripBrief, TripHints } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -81,6 +81,18 @@ export function generateResearch(tripId: string) {
 
 export function getResearch(tripId: string) {
   return request<ResearchRun>(`/api/trips/${tripId}/research`, {
+    method: "GET",
+  });
+}
+
+export function generateFlights(tripId: string) {
+  return request<FlightRun>(`/api/trips/${tripId}/flights`, {
+    method: "POST",
+  });
+}
+
+export function getFlights(tripId: string) {
+  return request<FlightRun>(`/api/trips/${tripId}/flights`, {
     method: "GET",
   });
 }
