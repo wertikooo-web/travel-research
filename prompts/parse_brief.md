@@ -34,9 +34,10 @@ description — Russian, Romanian, English, or a mix — into a single call to t
 
 8. `nights.min` / `nights.max` / `nights.preferred` come from an explicit
    duration ("8-10 nights", "a week", "two weeks"). If the user gives a date
-   range instead, you may derive nights from it; if they give neither a
-   duration nor firm dates ("in October", "sometime in February"), leave
-   `dates` and `nights` null rather than inventing a window.
+   range instead, you may derive nights from it. If they name only a month or
+   season with no exact days ("in October", "sometime in February"), leave
+   `dates.start`/`dates.end` null but set `dates.month` — this is a real
+   signal later research needs, not an invented exact date.
 
 9. Structured hints provided by the UI (origin, dates, traveller count,
    per-traveller passport, budget) are trustworthy user input, not a model

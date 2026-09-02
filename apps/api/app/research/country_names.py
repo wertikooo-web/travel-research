@@ -95,3 +95,82 @@ def resolve_country_code(term: str) -> str | None:
     if len(key) == 2 and key.isalpha():
         return key.upper()
     return COUNTRY_NAME_TO_ISO2.get(key)
+
+
+# ISO2 -> canonical English country name, needed to match a destination's row
+# inside a Wikipedia visa-requirements table (which lists countries by name).
+ISO2_TO_COUNTRY_NAME: dict[str, str] = {
+    "MD": "Moldova",
+    "RO": "Romania",
+    "EG": "Egypt",
+    "TR": "Turkey",
+    "TH": "Thailand",
+    "VN": "Vietnam",
+    "GR": "Greece",
+    "ES": "Spain",
+    "IT": "Italy",
+    "PT": "Portugal",
+    "CY": "Cyprus",
+    "AE": "United Arab Emirates",
+    "OM": "Oman",
+    "MA": "Morocco",
+    "TN": "Tunisia",
+    "MV": "Maldives",
+    "LK": "Sri Lanka",
+    "ID": "Indonesia",
+    "MY": "Malaysia",
+    "PH": "Philippines",
+    "MX": "Mexico",
+    "DO": "Dominican Republic",
+    "CU": "Cuba",
+    "TZ": "Tanzania",
+    "SC": "Seychelles",
+    "MU": "Mauritius",
+    "JO": "Jordan",
+    "IL": "Israel",
+    "GE": "Georgia",
+    "AM": "Armenia",
+    "AZ": "Azerbaijan",
+    "ME": "Montenegro",
+    "HR": "Croatia",
+    "AL": "Albania",
+    "BG": "Bulgaria",
+    "US": "United States",
+    "GB": "United Kingdom",
+    "DE": "Germany",
+    "FR": "France",
+    "PL": "Poland",
+    "UA": "Ukraine",
+    "RU": "Russia",
+}
+
+# ISO2 -> demonym, needed to build the Wikipedia page title convention
+# "Visa requirements for <Demonym> citizens" (e.g. "Moldovan", not "Moldova").
+# Deliberately covers only the passport countries this product realistically
+# sees at launch (Moldova/Romania) plus a handful of common others.
+ISO2_TO_DEMONYM: dict[str, str] = {
+    "MD": "Moldovan",
+    "RO": "Romanian",
+    "US": "American",
+    "GB": "British",
+    "DE": "German",
+    "FR": "French",
+    "IT": "Italian",
+    "ES": "Spanish",
+    "PT": "Portuguese",
+    "PL": "Polish",
+    "UA": "Ukrainian",
+    "RU": "Russian",
+    "TR": "Turkish",
+    "GR": "Greek",
+    "BG": "Bulgarian",
+    "HR": "Croatian",
+}
+
+
+def country_name(code: str) -> str | None:
+    return ISO2_TO_COUNTRY_NAME.get(code.strip().upper())
+
+
+def demonym(code: str) -> str | None:
+    return ISO2_TO_DEMONYM.get(code.strip().upper())

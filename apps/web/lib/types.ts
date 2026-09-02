@@ -140,6 +140,94 @@ export interface CandidateRun {
   completed_at: string | null;
 }
 
+// --- Research (Milestone 3) --------------------------------------------------
+
+export type FactStatus = "known" | "unknown" | "unavailable" | "conflicting" | "not_applicable";
+export type ComponentStatus = "pending" | "success" | "partial" | "failed" | "unknown";
+export type VisaStatus =
+  | "visa_free"
+  | "visa_on_arrival"
+  | "evisa"
+  | "electronic_authorization"
+  | "visa_required"
+  | "entry_restricted"
+  | "unknown";
+
+export interface Evidence {
+  id: string | null;
+  source_type: string;
+  provider: string;
+  url: string | null;
+  retrieved_at: string;
+  published_or_updated_at: string | null;
+  title: string | null;
+  raw_excerpt: string | null;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface FactResult<T> {
+  status: FactStatus;
+  value: T | null;
+  evidence: Evidence[];
+  note: string | null;
+}
+
+export interface DestinationIdentity {
+  display_name: string;
+  country_code: string | null;
+  destination_type: DestinationType | null;
+  parent_country_name: string | null;
+  coordinates: { lat: number; lon: number } | null;
+  timezone: string | null;
+  aliases: string[];
+}
+
+export interface WeatherFacts {
+  period_basis: "forecast" | "historical_climate" | "historical_observation" | null;
+  period_description: string | null;
+  day_temp_c: FactResult<number>;
+  night_temp_c: FactResult<number>;
+  sea_temp_c: FactResult<number>;
+  rainy_day_ratio: FactResult<number>;
+}
+
+export interface VisaResult {
+  traveller_id: string;
+  passport_country: string | null;
+  destination_country: string | null;
+  status: FactResult<VisaStatus>;
+  allowed_stay_days: FactResult<number>;
+  application_method: string | null;
+  conditions: string[];
+  checked_for_period: string | null;
+}
+
+export interface DestinationResearch {
+  candidate_id: string;
+  identity: DestinationIdentity | null;
+  basics_status: ComponentStatus;
+  weather: WeatherFacts | null;
+  weather_status: ComponentStatus;
+  visa_results: VisaResult[];
+  visa_status: ComponentStatus;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface ResearchRun {
+  id: string;
+  trip_id: string;
+  candidate_run_id: string;
+  brief_id: string;
+  version: number;
+  status: "pending" | "completed" | "partial" | "failed";
+  results: DestinationResearch[];
+  warnings: string[];
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
 export function emptyTripBrief(): TripBrief {
   return {
     travellers: [],

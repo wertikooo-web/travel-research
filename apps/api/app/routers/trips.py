@@ -11,7 +11,8 @@ from ..llm.fake_candidate_provider import FakeCandidateProvider
 from ..llm.fake_provider import FakeLLMProvider
 from ..llm.provider import LLMConfigError, LLMParseError
 from ..research.candidate_generator import generate_candidates
-from ..schemas import ParseTripRequest, TripBrief
+from ..research.research_pipeline import run_research, summarize_run_status
+from ..schemas import Candidate, ParseTripRequest, TripBrief
 
 router = APIRouter(prefix="/api/trips", tags=["trips"])
 
@@ -245,3 +246,99 @@ def get_trip_candidates(trip_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="no candidate run yet — call POST .../candidates first")
     latest_run = trip.candidate_runs[-1]
     return _serialize_candidate_run(latest_run)
+
+
+def get_visa_extraction_provider():
+    """Optional: the deterministic keyword classifier in research/visa.py
+    handles the vast majority of rows on its own. This is only consulted for
+    phrasing it doesn't recognize, so its absence degrades gracefully to
+    'unknown' for those rows rather than blocking research entirely."""
+    if os.environ.get("TRIPMATCH_FAKE_LLM") == "1":
+        return None
+    try:
+        from ..llm.visa_extraction_provider import AnthropicVisaExtractionProvider
+
+        return AnthropicVisaExtractionProvider()
+    except LLMConfigError:
+        return None
+
+
+def _serialize_research_run(run: models.ResearchRun) -> dict:
+    return {
+        "id": run.id,
+        "trip_id": run.trip_id,
+        "candidate_run_id": run.candidate_run_id,
+        "brief_id": run.brief_id,
+        "version": run.version,
+        "status": run.status,
+        "results": run.results or [],
+        "warnings": run.warnings or [],
+        "error": run.error,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
+@router.post("/{trip_id}/research")
+async def generate_trip_research(
+    trip_id: str,
+    db: Session = Depends(get_db),
+    visa_extraction_provider=Depends(get_visa_extraction_provider),
+):
+    trip = _get_trip_or_404(trip_id, db)
+    latest_brief = _latest_brief(trip)
+    if latest_brief is None or latest_brief.confirmed_at is None:
+        raise HTTPException(status_code=400, detail="research requires a confirmed brief")
+    if not trip.candidate_runs:
+        raise HTTPException(status_code=400, detail="research requires an existing candidate run — call POST .../candidates first")
+
+    latest_candidate_run = trip.candidate_runs[-1]
+    if latest_candidate_run.status != "completed" or not latest_candidate_run.candidates:
+        raise HTTPException(status_code=400, detail="latest candidate run has no candidates to research")
+
+    next_version = len(trip.research_runs) + 1
+    run = models.ResearchRun(
+        trip_id=trip.id,
+        candidate_run_id=latest_candidate_run.id,
+        brief_id=latest_brief.id,
+        version=next_version,
+        status="pending",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    try:
+        brief = TripBrief.model_validate(latest_brief.structured_brief)
+        candidates = [Candidate.model_validate(c) for c in latest_candidate_run.candidates]
+        results = await run_research(candidates, brief, visa_extraction_provider=visa_extraction_provider)
+    except Exception as e:  # a research-run failure must never corrupt a prior successful run
+        run.status = "failed"
+        run.error = f"research run failed: {e}"
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=502, detail="Research failed unexpectedly") from e
+
+    run.status = summarize_run_status(results)
+    run.results = [r.model_dump(mode="json") for r in results]
+    run.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(run)
+    return _serialize_research_run(run)
+
+
+@router.get("/{trip_id}/research")
+def get_trip_research(trip_id: str, db: Session = Depends(get_db)):
+    trip = _get_trip_or_404(trip_id, db)
+    if not trip.research_runs:
+        raise HTTPException(status_code=404, detail="no research run yet — call POST .../research first")
+    return _serialize_research_run(trip.research_runs[-1])
+
+
+@router.get("/{trip_id}/research/{run_id}")
+def get_trip_research_run(trip_id: str, run_id: str, db: Session = Depends(get_db)):
+    trip = _get_trip_or_404(trip_id, db)
+    run = next((r for r in trip.research_runs if r.id == run_id), None)
+    if run is None:
+        raise HTTPException(status_code=404, detail="research run not found")
+    return _serialize_research_run(run)

@@ -3,9 +3,10 @@
 import { useState } from "react";
 import BriefConfirmation from "@/components/BriefConfirmation";
 import CandidateList from "@/components/CandidateList";
+import ResearchView from "@/components/ResearchView";
 import TripInputForm from "@/components/TripInputForm";
-import { ApiError, confirmBrief, createTrip, generateCandidates, parseTrip, updateBrief } from "@/lib/api";
-import type { BriefRecord, CandidateRun, TripBrief, TripHints } from "@/lib/types";
+import { ApiError, confirmBrief, createTrip, generateCandidates, generateResearch, parseTrip, updateBrief } from "@/lib/api";
+import type { BriefRecord, CandidateRun, ResearchRun, TripBrief, TripHints } from "@/lib/types";
 
 type Stage = "input" | "confirm" | "confirmed";
 
@@ -21,6 +22,10 @@ export default function Home() {
   const [candidateRun, setCandidateRun] = useState<CandidateRun | null>(null);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
+
+  const [researchRun, setResearchRun] = useState<ResearchRun | null>(null);
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
 
   async function handleSubmit(text: string, hints: TripHints | undefined) {
     setLoading(true);
@@ -68,6 +73,8 @@ export default function Home() {
     setError(null);
     setCandidateRun(null);
     setCandidatesError(null);
+    setResearchRun(null);
+    setResearchError(null);
   }
 
   async function handleGenerateCandidates() {
@@ -81,6 +88,20 @@ export default function Home() {
       setCandidatesError(e instanceof ApiError ? e.message : "Не удалось подобрать направления. Попробуйте ещё раз.");
     } finally {
       setCandidatesLoading(false);
+    }
+  }
+
+  async function handleGenerateResearch() {
+    if (!tripId) return;
+    setResearchLoading(true);
+    setResearchError(null);
+    try {
+      const run = await generateResearch(tripId);
+      setResearchRun(run);
+    } catch (e) {
+      setResearchError(e instanceof ApiError ? e.message : "Не удалось собрать данные по направлениям. Попробуйте ещё раз.");
+    } finally {
+      setResearchLoading(false);
     }
   }
 
@@ -144,6 +165,32 @@ export default function Home() {
                 Направления для проверки ({candidateRun.candidate_count})
               </h2>
               <CandidateList candidates={candidateRun.candidates} />
+            </div>
+          )}
+
+          {candidateRun && candidateRun.status === "completed" && candidateRun.candidates.length > 0 && (
+            <div className="flex flex-col gap-4 border-t border-gray-200 pt-4">
+              <button
+                type="button"
+                onClick={handleGenerateResearch}
+                disabled={researchLoading}
+                className="self-start rounded-lg bg-blue-600 px-6 py-3 text-base font-medium text-white hover:bg-blue-700 disabled:bg-gray-300"
+              >
+                {researchLoading ? "Собираем данные (погода, визы)…" : "Исследовать направления"}
+              </button>
+
+              {researchError && (
+                <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{researchError}</div>
+              )}
+
+              {researchRun && (
+                <div>
+                  <h2 className="mb-3 text-lg font-semibold text-gray-900">
+                    Собранные факты · run v{researchRun.version} ({researchRun.status})
+                  </h2>
+                  <ResearchView results={researchRun.results} candidates={candidateRun.candidates} runWarnings={researchRun.warnings} />
+                </div>
+              )}
             </div>
           )}
         </div>

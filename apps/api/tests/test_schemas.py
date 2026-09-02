@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import DestinationPick, Traveller, TripBrief
+from app.schemas import DestinationPick, Evidence, FactResult, Dates, Traveller, TripBrief
 
 
 def test_brief_defaults_to_empty_not_invented():
@@ -58,3 +58,43 @@ def test_child_with_age():
     t = Traveller(type="child", age=8)
     assert t.type == "child"
     assert t.age == 8
+
+
+def test_dates_month_accepts_1_to_12():
+    d = Dates(month=10)
+    assert d.month == 10
+
+
+def test_dates_month_rejects_out_of_range():
+    with pytest.raises(ValidationError):
+        Dates(month=13)
+    with pytest.raises(ValidationError):
+        Dates(month=0)
+
+
+def test_old_dates_json_without_month_still_loads():
+    d = Dates.model_validate({"start": None, "end": None, "flex_days": None})
+    assert d.month is None
+
+
+def test_fact_result_unknown_has_no_value_and_no_evidence():
+    fact = FactResult(status="unknown")
+    assert fact.value is None
+    assert fact.evidence == []
+
+
+def test_fact_result_known_is_distinguishable_from_unknown():
+    known = FactResult(status="known", value=False)
+    unknown = FactResult(status="unknown")
+    # "verified false" must never look like "we don't know" — the whole point of FactResult
+    assert known.status != unknown.status
+    assert known.value is False
+    assert unknown.value is None
+
+
+def test_evidence_requires_source_type_and_provider():
+    with pytest.raises(ValidationError):
+        Evidence(provider="Wikipedia", retrieved_at="2026-01-01T00:00:00Z")  # missing source_type
+
+    ev = Evidence(source_type="secondary_travel_site", provider="Wikipedia", retrieved_at="2026-01-01T00:00:00Z")
+    assert ev.confidence == "medium"  # sensible default, never silently "high"

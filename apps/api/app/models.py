@@ -36,6 +36,11 @@ class Trip(Base):
         back_populates="trip",
         order_by="CandidateRun.version",
     )
+    research_runs = relationship(
+        "ResearchRun",
+        back_populates="trip",
+        order_by="ResearchRun.version",
+    )
 
 
 class TripBriefRecord(Base):
@@ -78,3 +83,28 @@ class CandidateRun(Base):
     completed_at = Column(DateTime, nullable=True)
 
     trip = relationship("Trip", back_populates="candidate_runs")
+
+
+class ResearchRun(Base):
+    """One evidence-gathering pass over a CandidateRun's destinations.
+
+    Same immutability contract as CandidateRun: a rerun creates version N+1
+    and never touches version N, so historical research stays inspectable
+    even after the traveller edits their brief or the candidate pool changes.
+    """
+
+    __tablename__ = "research_runs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    trip_id = Column(String, ForeignKey("trips.id"), nullable=False)
+    candidate_run_id = Column(String, ForeignKey("candidate_runs.id"), nullable=False)
+    brief_id = Column(String, ForeignKey("trip_briefs.id"), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False, default="pending")  # pending|completed|partial|failed
+    results = Column(JSON, nullable=True)  # List[DestinationResearch]
+    warnings = Column(JSON, nullable=True)
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    trip = relationship("Trip", back_populates="research_runs")

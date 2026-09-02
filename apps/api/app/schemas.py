@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import List, Literal, Optional
+from typing import Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -50,6 +50,19 @@ class Dates(BaseModel):
     start: Optional[date] = None
     end: Optional[date] = None
     flex_days: Optional[int] = None
+    # Set when the traveller named a month/season but no exact days ("late
+    # October", "in February") — the common case M1 correctly leaves start/end
+    # null for. Without this, research has no reproducible period signal at
+    # all for that case short of re-reading raw text. 1-12, additive/optional,
+    # old briefs default to null.
+    month: Optional[int] = None
+
+    @field_validator("month")
+    @classmethod
+    def _validate_month(cls, v):
+        if v is not None and not (1 <= v <= 12):
+            raise ValueError("month must be between 1 and 12")
+        return v
 
 
 class Nights(BaseModel):
@@ -203,5 +216,137 @@ class CandidateRunSummary(BaseModel):
     candidate_count: int = 0
     error: Optional[str] = None
     candidates: List[Candidate] = Field(default_factory=list)
+    created_at: str
+    completed_at: Optional[str] = None
+
+
+# --- Research (Milestone 3) --------------------------------------------------
+#
+# "known" vs "unknown" vs "unavailable" vs "conflicting" vs "not_applicable"
+# must never collapse into the same null the way a plain Optional[T] would:
+# "direct flight unknown" must never behave like "direct flight doesn't exist".
+# Every factual field below is a FactResult, not a bare Optional.
+
+FactStatus = Literal["known", "unknown", "unavailable", "conflicting", "not_applicable"]
+
+EvidenceSourceType = Literal[
+    "official_government",
+    "embassy_consular",
+    "citizenship_country_authority",
+    "structured_travel_provider",
+    "secondary_travel_site",
+    "weather_provider",
+    "geo_provider",
+]
+EvidenceConfidence = Literal["high", "medium", "low"]
+ComponentStatus = Literal["pending", "success", "partial", "failed", "unknown"]
+WeatherPeriodBasis = Literal["forecast", "historical_climate", "historical_observation"]
+VisaStatus = Literal[
+    "visa_free",
+    "visa_on_arrival",
+    "evisa",
+    "electronic_authorization",
+    "visa_required",
+    "entry_restricted",
+    "unknown",
+]
+
+
+class Evidence(BaseModel):
+    """The one reusable provenance object every factual claim points to —
+    weather, visa, and (later) flights/hotels/prices/safety alike. No source
+    -> no verified fact. Deliberately small: metadata for traceability and
+    debugging, never a copy of the source page."""
+
+    id: Optional[str] = None  # assigned by the backend
+    source_type: EvidenceSourceType
+    provider: str
+    url: Optional[str] = None
+    retrieved_at: str
+    published_or_updated_at: Optional[str] = None
+    title: Optional[str] = None
+    raw_excerpt: Optional[str] = None
+    confidence: EvidenceConfidence = "medium"
+
+
+ResearchValueT = TypeVar("ResearchValueT")
+
+
+class FactResult(BaseModel, Generic[ResearchValueT]):
+    status: FactStatus
+    value: Optional[ResearchValueT] = None
+    evidence: List[Evidence] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+def _unknown_fact() -> FactResult:
+    return FactResult(status="unknown")
+
+
+class Coordinates(BaseModel):
+    lat: float
+    lon: float
+
+
+class DestinationIdentity(BaseModel):
+    """Milestone 2 identified destinations by string. Sources call the same
+    place different things, so research needs something slightly stronger —
+    not a global geography service, just enough to avoid obvious mismatches."""
+
+    display_name: str
+    country_code: Optional[str] = None
+    destination_type: Optional[DestinationType] = None
+    parent_country_name: Optional[str] = None
+    coordinates: Optional[Coordinates] = None
+    timezone: Optional[str] = None
+    aliases: List[str] = Field(default_factory=list)
+
+
+class WeatherFacts(BaseModel):
+    period_basis: Optional[WeatherPeriodBasis] = None
+    period_description: Optional[str] = None
+    day_temp_c: FactResult[float] = Field(default_factory=_unknown_fact)
+    night_temp_c: FactResult[float] = Field(default_factory=_unknown_fact)
+    sea_temp_c: FactResult[float] = Field(default_factory=_unknown_fact)
+    rainy_day_ratio: FactResult[float] = Field(default_factory=_unknown_fact)
+
+
+class VisaResult(BaseModel):
+    """Visa status belongs to destination + traveller + passport + travel
+    period — never to the trip as a whole. One of these per passport a
+    traveller actually holds, never collapsed into a single group verdict."""
+
+    traveller_id: str
+    passport_country: Optional[str] = None  # null only when the traveller's passport itself is unknown
+    destination_country: Optional[str] = None
+    status: FactResult[VisaStatus] = Field(default_factory=_unknown_fact)
+    allowed_stay_days: FactResult[int] = Field(default_factory=_unknown_fact)
+    application_method: Optional[str] = None
+    conditions: List[str] = Field(default_factory=list)
+    checked_for_period: Optional[str] = None
+
+
+class DestinationResearch(BaseModel):
+    candidate_id: str
+    identity: Optional[DestinationIdentity] = None
+    basics_status: ComponentStatus = "pending"
+    weather: Optional[WeatherFacts] = None
+    weather_status: ComponentStatus = "pending"
+    visa_results: List[VisaResult] = Field(default_factory=list)
+    visa_status: ComponentStatus = "pending"
+    warnings: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+
+
+class ResearchRunSummary(BaseModel):
+    id: str
+    trip_id: str
+    candidate_run_id: str
+    brief_id: str
+    version: int
+    status: Literal["pending", "completed", "partial", "failed"]
+    results: List[DestinationResearch] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
     created_at: str
     completed_at: Optional[str] = None

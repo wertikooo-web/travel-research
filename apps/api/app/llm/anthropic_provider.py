@@ -60,6 +60,13 @@ TOOL_SCHEMA: dict[str, Any] = {
                 "start": {"type": ["string", "null"], "description": "ISO date YYYY-MM-DD, only if reasonably precise"},
                 "end": {"type": ["string", "null"], "description": "ISO date YYYY-MM-DD"},
                 "flex_days": {"type": ["integer", "null"]},
+                "month": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "1-12: set this when a month or season is named but no exact days are given "
+                        "(e.g. 'late October' -> 10, 'in February' -> 2). Null if no month/season was mentioned at all."
+                    ),
+                },
             },
         },
         "nights": {
