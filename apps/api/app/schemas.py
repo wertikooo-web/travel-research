@@ -93,6 +93,25 @@ class Preferences(BaseModel):
     prefer: List[str] = Field(default_factory=list)
 
 
+class DestinationPick(BaseModel):
+    """A destination the traveller explicitly named — user intent, not an LLM
+    hypothesis. Confirmed as part of TripBrief; CandidateGenerator treats
+    every entry here as a deterministic guarantee, never a suggestion."""
+
+    text: str
+    country_code: Optional[str] = None
+
+    @field_validator("country_code", mode="before")
+    @classmethod
+    def _norm_country_code(cls, v):
+        return _iso2(v)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _norm_text(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+
 class TripBrief(BaseModel):
     origin: Optional[Origin] = None
     travellers: List[Traveller] = Field(default_factory=list)
@@ -104,6 +123,7 @@ class TripBrief(BaseModel):
     weather: Optional[Weather] = None
     visa: Optional[VisaPreferences] = None
     preferences: Optional[Preferences] = None
+    destination_picks: List[DestinationPick] = Field(default_factory=list)
 
 
 class TravellerHint(BaseModel):

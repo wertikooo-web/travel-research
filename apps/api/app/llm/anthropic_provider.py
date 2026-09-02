@@ -123,6 +123,22 @@ TOOL_SCHEMA: dict[str, Any] = {
                 "prefer": {"type": "array", "items": {"type": "string"}},
             },
         },
+        "destination_picks": {
+            "type": "array",
+            "description": (
+                "Destinations the traveller explicitly named as something they're considering "
+                "(e.g. 'thinking about Thailand and Vietnam'). Do NOT include destinations you "
+                "yourself think would fit — only ones the traveller actually named."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The destination as the traveller named it"},
+                    "country_code": {"type": ["string", "null"], "description": "ISO alpha-2, only if confidently known"},
+                },
+                "required": ["text"],
+            },
+        },
     },
     "required": ["travellers"],
 }

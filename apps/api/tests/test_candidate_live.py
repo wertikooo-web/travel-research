@@ -61,8 +61,18 @@ def test_case_b_sparse_asia_no_invented_constraints(brief_provider, candidate_pr
 
 
 def test_case_c_user_picks_survive(brief_provider, candidate_provider):
+    from app.research.candidate_generator import generate_candidates
+
     text = "Хочу море в ноябре. Думаю про Thailand и Vietnam."
-    result = _generate(text, brief_provider, candidate_provider)
+
+    # deterministic guarantee starts at parse time — the brief itself must
+    # carry the picks, independent of what the candidate-generation call does
+    brief = brief_provider.parse_brief(text)
+    pick_texts = " ".join(p.text.lower() for p in brief.destination_picks)
+    assert "thai" in pick_texts
+    assert "vietnam" in pick_texts
+
+    result = generate_candidates(brief, text, candidate_provider)
 
     user_picks = [c for c in result.candidates if c.source == "user"]
     user_countries = {c.country_code for c in user_picks}

@@ -25,6 +25,7 @@ function normalize(b: TripBrief): TripBrief {
     weather: b.weather ?? {},
     visa: b.visa ?? {},
     preferences: b.preferences ?? { avoid: [], prefer: [] },
+    destination_picks: b.destination_picks ?? [],
   };
 }
 
@@ -167,6 +168,18 @@ export default function BriefConfirmation({ brief, rawRequest, onConfirm, onBack
             />
           </div>
         </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-200 p-4">
+        <h3 className="mb-3 font-medium text-gray-900">Конкретные направления</h3>
+        <p className="mb-2 text-xs text-gray-500">
+          Места, которые вы сами назвали — они обязательно попадут в подборку направлений.
+        </p>
+        <TagField
+          label="Направления"
+          values={edited.destination_picks.map((p) => p.text)}
+          onChange={(names) => setEdited((prev) => ({ ...prev, destination_picks: names.map((text) => ({ text })) }))}
+        />
       </section>
 
       <section className="rounded-lg border border-gray-200 p-4">

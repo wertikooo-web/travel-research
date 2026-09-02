@@ -1,6 +1,6 @@
 from app.llm.fake_candidate_provider import FakeCandidateProvider
 from app.research.candidate_generator import generate_candidates
-from app.schemas import Preferences, TripBrief
+from app.schemas import DestinationPick, Preferences, TripBrief
 
 
 def _cand(name, category="core", source="llm", country_code=None, reason="fits the brief"):
@@ -15,8 +15,11 @@ def _cand(name, category="core", source="llm", country_code=None, reason="fits t
     }
 
 
-def _brief(avoid=None):
-    return TripBrief(preferences=Preferences(avoid=avoid or [], prefer=[]))
+def _brief(avoid=None, picks=None):
+    return TripBrief(
+        preferences=Preferences(avoid=avoid or [], prefer=[]),
+        destination_picks=[DestinationPick(text=p) for p in (picks or [])],
+    )
 
 
 def test_valid_candidates_pass_through():
@@ -110,3 +113,72 @@ def test_ids_assigned_sequentially_by_backend():
     raw = [_cand("A"), _cand("B"), _cand("C")]
     result = generate_candidates(_brief(), None, FakeCandidateProvider(raw))
     assert [c.id for c in result.candidates] == ["cand_1", "cand_2", "cand_3"]
+
+
+# --- explicit destination picks are a backend guarantee, not an LLM courtesy ---
+
+
+def test_explicit_picks_survive_even_when_provider_omits_them_entirely():
+    brief = _brief(picks=["Thailand", "Vietnam"])
+    raw = [_cand("Malta", country_code="MT")]  # provider ignores both picks completely
+    result = generate_candidates(brief, None, FakeCandidateProvider(raw))
+
+    names = {c.destination_name for c in result.candidates}
+    assert "Thailand" in names and "Vietnam" in names
+    picks = {c.destination_name: c for c in result.candidates if c.destination_name in ("Thailand", "Vietnam")}
+    assert all(c.source == "user" for c in picks.values())
+    assert any("omitted it" in w for w in result.warnings)
+
+
+def test_provider_sourced_llm_gets_promoted_to_user_for_a_pick():
+    brief = _brief(picks=["Thailand"])
+    raw = [_cand("Thailand", country_code="TH", source="llm", reason="looks like a decent beach option")]
+    result = generate_candidates(brief, None, FakeCandidateProvider(raw))
+
+    assert len(result.candidates) == 1
+    thailand = result.candidates[0]
+    assert thailand.source == "user"
+    assert thailand.reason_to_check == "looks like a decent beach option"  # LLM's reasoning preserved, only source changes
+    assert any("promoted" in w for w in result.warnings)
+
+
+def test_pick_dedup_preserves_intent_without_swallowing_a_distinct_city():
+    brief = _brief(picks=["Thailand"])
+    raw = [
+        _cand("Thailand", country_code="TH", source="llm"),  # same as the pick -> merges + promotes
+        _cand("Phuket", country_code="TH", source="llm"),  # a different, more specific place -> stays separate
+    ]
+    result = generate_candidates(brief, None, FakeCandidateProvider(raw))
+
+    by_name = {c.destination_name: c for c in result.candidates}
+    assert by_name["Thailand"].source == "user"
+    assert "Phuket" in by_name
+    assert by_name["Phuket"].source == "llm"
+
+
+def test_user_picks_are_never_removed_even_beyond_max_total():
+    brief = _brief(picks=["Thailand", "Vietnam", "Cambodia", "Laos"])
+    result = generate_candidates(brief, None, FakeCandidateProvider([]), max_total=2)
+
+    names = {c.destination_name for c in result.candidates}
+    assert names == {"Thailand", "Vietnam", "Cambodia", "Laos"}
+    assert len(result.candidates) == 4  # exceeds max_total=2 on purpose
+    assert any("exceeding max_total" in w for w in result.warnings)
+
+
+def test_pick_that_is_also_avoided_survives_with_a_conflict_warning():
+    brief = _brief(avoid=["Thailand"], picks=["Thailand"])
+    result = generate_candidates(brief, None, FakeCandidateProvider([]))
+
+    assert any(c.destination_name == "Thailand" and c.source == "user" for c in result.candidates)
+    assert any("conflict" in w and "Thailand" in w for w in result.warnings)
+
+
+def test_old_brief_without_destination_picks_field_still_works():
+    # simulates a Milestone 1 brief loaded from a saved JSON blob that predates this field
+    old_brief_json = {"travellers": [], "preferences": {"avoid": [], "prefer": []}}
+    brief = TripBrief.model_validate(old_brief_json)
+    assert brief.destination_picks == []
+
+    result = generate_candidates(brief, None, FakeCandidateProvider([_cand("Malta", country_code="MT")]))
+    assert len(result.candidates) == 1

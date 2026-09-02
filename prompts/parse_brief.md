@@ -43,5 +43,13 @@ description — Russian, Romanian, English, or a mix — into a single call to t
    guess — merge them into the result. If the free text conflicts with a
    hint, prefer the free text; it's more specific.
 
-10. Output only through the `emit_trip_brief` tool call. No commentary, no
+10. If the traveller explicitly names a destination they're considering
+    ("thinking about Thailand and Vietnam", "can we do Cyprus"), record it in
+    `destination_picks`. This is a factual extraction, not a suggestion —
+    only include destinations the traveller actually named, never ones you
+    think would fit. `destination_picks` is separate from `preferences.avoid`:
+    a place the traveller says to avoid never belongs here even if it's
+    mentioned by name.
+
+11. Output only through the `emit_trip_brief` tool call. No commentary, no
     markdown, no explanation outside the tool call.

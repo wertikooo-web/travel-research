@@ -65,6 +65,11 @@ export interface Preferences {
   prefer: string[];
 }
 
+export interface DestinationPick {
+  text: string;
+  country_code?: string | null;
+}
+
 export interface TripBrief {
   origin?: Origin | null;
   travellers: Traveller[];
@@ -76,6 +81,7 @@ export interface TripBrief {
   weather?: Weather | null;
   visa?: VisaPreferences | null;
   preferences?: Preferences | null;
+  destination_picks: DestinationPick[];
 }
 
 export interface TravellerHint {
@@ -138,5 +144,6 @@ export function emptyTripBrief(): TripBrief {
   return {
     travellers: [],
     preferences: { avoid: [], prefer: [] },
+    destination_picks: [],
   };
 }

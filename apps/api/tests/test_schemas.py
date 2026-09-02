@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import Traveller, TripBrief
+from app.schemas import DestinationPick, Traveller, TripBrief
 
 
 def test_brief_defaults_to_empty_not_invented():
@@ -10,6 +10,24 @@ def test_brief_defaults_to_empty_not_invented():
     assert brief.origin is None
     assert brief.budget is None
     assert brief.hotel is None
+    assert brief.destination_picks == []
+
+
+def test_old_saved_brief_json_without_destination_picks_still_loads():
+    old_json = {
+        "origin": {"text": "Кишинёв", "iata": None},
+        "travellers": [{"id": "traveller_1", "type": "adult"}],
+        "preferences": {"avoid": [], "prefer": []},
+    }
+    brief = TripBrief.model_validate(old_json)
+    assert brief.destination_picks == []
+    assert brief.origin.text == "Кишинёв"
+
+
+def test_destination_pick_normalizes_country_code_and_trims_text():
+    pick = DestinationPick(text="  Thailand  ", country_code="th")
+    assert pick.text == "Thailand"
+    assert pick.country_code == "TH"
 
 
 def test_traveller_iso_codes_normalized():
