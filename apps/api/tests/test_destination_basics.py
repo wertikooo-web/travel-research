@@ -39,15 +39,19 @@ def test_basics_no_results_raises_not_a_guess():
         asyncio.run(run())
 
 
-def test_basics_falls_back_to_country_centroid_when_name_not_indexed():
-    # e.g. an LLM-generated Cyrillic destination name Open-Meteo's index has
-    # nothing for — losing the whole identity is worse than a coarser,
-    # still-sourced country-centroid fallback
+def test_basics_unresolved_name_with_country_code_stays_unresolved():
+    # Regression: an earlier version retried an unresolved destination name
+    # (e.g. an LLM-generated Cyrillic resort name) against its country's
+    # name, silently turning "I could not resolve Хургада" into "here are
+    # Egypt's centroid coordinates". A resort must never inherit its
+    # country's coordinates — it must stay unresolved. Requirement A.
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         name = httpx.QueryParams(request.url.query).get("name")
         calls.append(name)
+        # even if the provider *would* match the country name, this module
+        # must never query for it
         if name == "Egypt":
             return httpx.Response(
                 200,
@@ -57,17 +61,14 @@ def test_basics_falls_back_to_country_centroid_when_name_not_indexed():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await research_destination_basics("Египет", "EG", client)
+            return await research_destination_basics("Хургада", "EG", client)
 
-    identity, evidence = asyncio.run(run())
-    assert calls == ["Египет", "Egypt"]  # tried the given name first, then the country fallback
-    assert identity.country_code == "EG"
-    assert identity.coordinates.lat == 26.0
-    assert evidence.confidence == "medium"  # coarser than a direct match, not silently "high"
-    assert "fallback" in evidence.title.lower()
+    with pytest.raises(DestinationBasicsError):
+        asyncio.run(run())
+    assert calls == ["Хургада"]  # never retried against the country name
 
 
-def test_basics_no_country_code_means_no_fallback_attempted():
+def test_basics_no_country_code_still_raises_on_no_match():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -76,11 +77,11 @@ def test_basics_no_country_code_means_no_fallback_attempted():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await research_destination_basics("Египет", None, client)
+            return await research_destination_basics("Хургада", None, client)
 
     with pytest.raises(DestinationBasicsError):
         asyncio.run(run())
-    assert calls == ["Египет"]  # no country_code to fall back with — one attempt only
+    assert calls == ["Хургада"]  # a single attempt only — no fallback mechanism exists
 
 
 def test_basics_http_failure_raises():

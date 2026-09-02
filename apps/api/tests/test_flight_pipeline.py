@@ -146,6 +146,49 @@ def test_full_search_success():
     assert result.overall_status == "success"
 
 
+def test_geo_case_h_cyrillic_identity_resolves_via_coordinates_never_needs_the_cyrillic_text():
+    # M3's identity resolution already turned "Хургада" into verified
+    # coordinates + an English display_name; M4's primary resolution path
+    # must use those coordinates, never a Duffel text query for "Хургада"
+    candidates = [_candidate("Хургада", "EG")]
+    research_map = {
+        "c1": DestinationResearch(
+            candidate_id="c1",
+            identity=DestinationIdentity(display_name="Hurghada", country_code="EG", coordinates=Coordinates(lat=27.25, lon=33.81)),
+            basics_status="success",
+        )
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "places/suggestions" in url:
+            params = httpx.QueryParams(request.url.query)
+            if "lat" in params:
+                return httpx.Response(200, json={"data": [{"iata_code": "HRG", "type": "airport", "name": "Hurghada", "iata_country_code": "EG"}]})
+            # a text query here would mean the coordinate path was skipped —
+            # fail it loudly instead of silently resolving via "Хургада"
+            query = httpx.QueryParams(request.url.query).get("query")
+            if query == "Хургада":
+                raise AssertionError("primary destination resolution must not query Duffel by the raw candidate name")
+            if query == "Chisinau":
+                return httpx.Response(200, json={"data": [{"iata_code": "RMO", "type": "airport", "name": "Chisinau", "iata_country_code": "MD"}]})
+            return httpx.Response(200, json={"data": []})
+        if "offer_requests" in url:
+            import json
+
+            body = json.loads(request.content)
+            dest = body["data"]["slices"][0]["destination"]
+            return httpx.Response(200, json={"data": {"id": "orq_1", "offers": []}})
+        return httpx.Response(404)
+
+    result = _run(candidates, research_map, _brief(), httpx.MockTransport(handler))[0]
+    assert result.resolution_status == "success"
+    assert result.destination_place.iata_code == "HRG"
+    assert result.destination_place.resolved_via == "coordinates"
+    assert result.destination_place_evidence is not None
+    assert result.destination_place_evidence.provider == "Duffel"
+
+
 def test_case_h_unresolved_origin_no_search_attempted():
     candidates = [_candidate("Antalya", "TR")]
     research_map = {"c1": _research("Antalya", "TR")}

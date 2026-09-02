@@ -107,6 +107,40 @@ def test_weather_failure_does_not_sink_basics_or_visa():
     assert result.visa_status == "success"  # unaffected by the weather failure
 
 
+def test_unresolved_destination_gives_unknown_weather_never_country_level():
+    # test case I: an unresolved resort must not silently receive its
+    # country's weather — losing the fact is correct, a wrong-place fact is not
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "geocoding-api" in url:
+            return httpx.Response(200, json={"results": []})  # Хургада: no match, ever
+        if "archive-api" in url or "marine-api" in url:
+            # if this were ever hit, weather would be wrongly using some
+            # coordinate that isn't Хургада's own — must not happen
+            return httpx.Response(200, json=WEATHER_RESULT)
+        if "en.wikipedia.org" in url:
+            return httpx.Response(200, json={"parse": {"wikitext": WIKITEXT_TH}})
+        return httpx.Response(404)
+
+    brief = TripBrief(
+        dates=Dates(start=date(2026, 10, 20), end=date(2026, 10, 20)),
+        travellers=[Traveller(id="t1", type="adult", citizenships=["MD"], travel_passport="MD")],
+    )
+    candidate = Candidate(
+        id="cand_1", destination_name="Хургада", country_code="EG", reason_to_check="beach", source="llm", candidate_category="core"
+    )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await research_candidate(candidate, brief, client)
+
+    result = asyncio.run(run())
+    assert result.basics_status == "failed"
+    assert result.identity is None
+    assert result.weather_status == "unknown"
+    assert any("weather skipped" in w for w in result.warnings)
+
+
 def test_visa_source_failure_does_not_sink_basics_or_weather():
     brief = TripBrief(
         dates=Dates(start=date(2026, 10, 20), end=date(2026, 10, 20)),

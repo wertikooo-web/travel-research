@@ -22,6 +22,11 @@ from ..schemas import FlightItinerary, FlightOffer, FlightSearchPlan, FlightSegm
 DUFFEL_API_BASE = "https://api.duffel.com"
 DEFAULT_DUFFEL_VERSION = "v2"
 
+# Conservative V0 policy: one bounded radius search, no progressive expansion.
+# If nothing reasonable turns up within this radius, the destination stays
+# unresolved rather than guessing at an ever-wider search.
+DEFAULT_RADIUS_KM = 100
+
 
 class DuffelConfigError(Exception):
     """No API key configured."""
@@ -142,7 +147,55 @@ class DuffelFlightProvider:
             name=match.get("name", query),
             country_code=match.get("iata_country_code"),
             alternate_iata_codes=alt_codes,
+            resolved_via="text_query",
         )
+
+    async def resolve_place_by_coordinates(
+        self, lat: float, lon: float, radius_km: float, client: httpx.AsyncClient
+    ) -> Tuple[TransportPlace, dict]:
+        """Verified destination coordinates, not display-language text, drive
+        this lookup — the primary destination-resolution path when
+        DestinationIdentity carries trustworthy coordinates. One bounded
+        radius attempt; never progressively widened."""
+        try:
+            resp = await client.get(
+                f"{DUFFEL_API_BASE}/places/suggestions",
+                params={"lat": lat, "lng": lon, "rad": radius_km},
+                headers=self._headers(),
+                timeout=20.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPError as e:
+            raise DuffelError(f"coordinate place search failed for ({lat}, {lon}): {e}") from e
+
+        places = data.get("data") or []
+        if not places:
+            raise DuffelPlaceNotFoundError(f"no Duffel place within {radius_km}km of ({lat}, {lon})")
+
+        # same deterministic selection policy as resolve_place(): prefer a
+        # city (Duffel aggregates its airports server-side), else the first
+        # airport-type result; other candidates are preserved as alternates,
+        # not silently discarded.
+        match = next((p for p in places if p.get("type") == "city"), places[0])
+
+        alt_codes: List[str] = []
+        if match.get("type") == "city":
+            alt_codes = [a["iata_code"] for a in (match.get("airports") or []) if a.get("iata_code")]
+        else:
+            alt_codes = [p["iata_code"] for p in places if p is not match and p.get("iata_code")]
+
+        place = TransportPlace(
+            iata_code=match["iata_code"],
+            type=match.get("type", "airport"),
+            name=match.get("name", ""),
+            country_code=match.get("iata_country_code"),
+            alternate_iata_codes=alt_codes,
+            resolved_via="coordinates",
+            distance_km=match.get("distance"),
+        )
+        meta = {"radius_km": radius_km, "lat": lat, "lon": lon, "raw_count": len(places)}
+        return place, meta
 
     async def search(self, plan: FlightSearchPlan, client: httpx.AsyncClient) -> Tuple[List[FlightOffer], dict]:
         passengers_payload = []
@@ -196,9 +249,17 @@ class FakeFlightProvider:
     """Test double: no network, canned places/offers, following the same
     pattern as FakeCandidateProvider/FakeVisaExtractionProvider."""
 
-    def __init__(self, places: Optional[dict] = None, offers: Optional[List[FlightOffer]] = None):
+    def __init__(
+        self,
+        places: Optional[dict] = None,
+        offers: Optional[List[FlightOffer]] = None,
+        places_by_coordinates: Optional[dict] = None,
+    ):
         self.places = places if places is not None else {}
         self.offers = offers if offers is not None else []
+        # keyed by (lat, lon) tuple -> TransportPlace, mirroring resolve_place's
+        # query-keyed dict so tests can exercise the coordinate-first path
+        self.places_by_coordinates = places_by_coordinates if places_by_coordinates is not None else {}
         self.search_calls: List[FlightSearchPlan] = []
 
     async def resolve_place(self, query: str, country_code: Optional[str], client: httpx.AsyncClient) -> TransportPlace:
@@ -206,6 +267,14 @@ class FakeFlightProvider:
         if place is None:
             raise DuffelPlaceNotFoundError(f"no fake place for {query!r}")
         return place
+
+    async def resolve_place_by_coordinates(
+        self, lat: float, lon: float, radius_km: float, client: httpx.AsyncClient
+    ) -> Tuple[TransportPlace, dict]:
+        place = self.places_by_coordinates.get((lat, lon))
+        if place is None:
+            raise DuffelPlaceNotFoundError(f"no fake place within {radius_km}km of ({lat}, {lon})")
+        return place, {"radius_km": radius_km, "lat": lat, "lon": lon, "raw_count": 1}
 
     async def search(self, plan: FlightSearchPlan, client: httpx.AsyncClient) -> Tuple[List[FlightOffer], dict]:
         self.search_calls.append(plan)

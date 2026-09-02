@@ -28,12 +28,71 @@ from ..schemas import (
     TripBrief,
     TransportPlace,
 )
-from .duffel_provider import DuffelError, DuffelFlightProvider, DuffelPlaceNotFoundError
+from ..schemas import DestinationIdentity
+from .duffel_provider import DEFAULT_RADIUS_KM, DuffelError, DuffelFlightProvider, DuffelPlaceNotFoundError
 from .flight_dates import resolve_date_plans
 
 MAX_CONCURRENT_SEARCHES = 5
 MAX_TOTAL_SEARCHES_PER_RUN = 60  # defensive ceiling; the date/candidate caps already keep this far below in practice
 DEFAULT_MAX_CONNECTIONS = 1  # V0 policy: a preference is not silently promoted to a hard direct-only filter
+
+
+async def resolve_destination_place(
+    identity: DestinationIdentity,
+    candidate_country_code: Optional[str],
+    provider: DuffelFlightProvider,
+    client: httpx.AsyncClient,
+) -> Tuple[Optional[TransportPlace], Optional[Evidence], Optional[str]]:
+    """Deterministic destination airport-resolution hierarchy:
+
+    1. verified destination coordinates -> Duffel coordinate/radius lookup
+       (never the display-language string — this is what keeps Cyrillic or
+       any other candidate-language text out of the primary path)
+    2. verified normalized place name -> Duffel text query, as a fallback
+       when coordinates are missing or the radius search found nothing
+    3. neither works -> unresolved. Never substitutes a country centroid or
+       any other coarser geography for a destination that didn't resolve.
+    """
+    country_code = identity.country_code or candidate_country_code
+
+    if identity.coordinates is not None:
+        try:
+            place, meta = await provider.resolve_place_by_coordinates(
+                identity.coordinates.lat, identity.coordinates.lon, DEFAULT_RADIUS_KM, client
+            )
+            evidence = Evidence(
+                source_type="structured_travel_provider",
+                provider="Duffel",
+                retrieved_at=datetime.now(timezone.utc).isoformat(),
+                title=f"Duffel place within {meta['radius_km']}km of {identity.display_name}",
+                raw_excerpt=(
+                    f"searched ({meta['lat']}, {meta['lon']}) rad={meta['radius_km']}km -> "
+                    f"matched {place.name} ({place.iata_code}), distance_km={place.distance_km}, "
+                    f"candidates_returned={meta['raw_count']}"
+                ),
+                confidence="high",
+            )
+            return place, evidence, None
+        except DuffelPlaceNotFoundError:
+            pass  # fall through to text query below
+        except DuffelError as e:
+            return None, None, f"unavailable: destination coordinate lookup failed: {e}"
+
+    try:
+        place = await provider.resolve_place(identity.display_name, country_code, client)
+        evidence = Evidence(
+            source_type="structured_travel_provider",
+            provider="Duffel",
+            retrieved_at=datetime.now(timezone.utc).isoformat(),
+            title=f"Duffel place match for {identity.display_name}",
+            raw_excerpt=f"query={identity.display_name!r} country_code={country_code!r} -> {place.name} ({place.iata_code})",
+            confidence="high",
+        )
+        return place, evidence, None
+    except DuffelPlaceNotFoundError as e:
+        return None, None, f"insufficient_input: destination place unresolved: {e}"
+    except DuffelError as e:
+        return None, None, f"unavailable: destination place lookup failed: {e}"
 
 
 def _map_passenger(traveller: Traveller) -> FlightPassenger:
@@ -72,7 +131,12 @@ async def resolve_origin_place(
     if origin is None or (not origin.iata and not origin.text):
         return None, "insufficient_input: no origin in the confirmed brief"
     if origin.iata:
-        return TransportPlace(iata_code=origin.iata.upper(), type="airport", name=origin.text or origin.iata), None
+        return (
+            TransportPlace(
+                iata_code=origin.iata.upper(), type="airport", name=origin.text or origin.iata, resolved_via="confirmed_iata"
+            ),
+            None,
+        )
     try:
         place = await provider.resolve_place(origin.text, None, client)
         return place, None
@@ -162,24 +226,20 @@ async def research_candidate_flights(
         result.overall_status = "unknown"
         return result
 
-    # the verified, English geocoded name from M3's own identity resolution —
-    # never candidate.destination_name, which is raw (possibly non-Latin) LLM output
-    query_name = identity.display_name
-    try:
-        async with semaphore:
-            dest_place = await provider.resolve_place(query_name, identity.country_code or candidate.country_code, client)
-        result.destination_place = dest_place
-        result.resolution_status = "success"
-    except DuffelPlaceNotFoundError as e:
-        result.resolution_status = "unknown"
-        result.warnings.append(f"destination place unresolved: {e}")
-        result.overall_status = "unknown"
+    async with semaphore:
+        dest_place, dest_evidence, dest_error = await resolve_destination_place(
+            identity, candidate.country_code, provider, client
+        )
+
+    if dest_place is None:
+        result.resolution_status = "unknown" if dest_error and "insufficient_input" in dest_error else "failed"
+        result.warnings.append(dest_error or "destination place unresolved")
+        result.overall_status = result.resolution_status
         return result
-    except DuffelError as e:
-        result.resolution_status = "failed"
-        result.errors.append(f"destination place lookup failed: {e}")
-        result.overall_status = "failed"
-        return result
+
+    result.destination_place = dest_place
+    result.destination_place_evidence = dest_evidence
+    result.resolution_status = "success"
 
     plans, reason = resolve_date_plans(brief.dates, brief.nights)
     if not plans:

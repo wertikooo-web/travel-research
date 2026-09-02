@@ -201,6 +201,94 @@ def _plan():
     )
 
 
+# --- coordinate-based place resolution (Requirement 2/3/5) ----------------
+
+
+def _coord_transport(response_places, status=200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "places/suggestions" in str(request.url):
+            params = httpx.QueryParams(request.url.query)
+            assert "lat" in params and "lng" in params and "rad" in params
+            return httpx.Response(status, json={"data": response_places})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def test_resolve_place_by_coordinates_returns_nearby_airport():
+    # test case C
+    places = [{"iata_code": "HRG", "type": "airport", "name": "Hurghada", "iata_country_code": "EG", "distance": 12.4}]
+
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=_coord_transport(places)) as client:
+            return await provider.resolve_place_by_coordinates(27.25, 33.81, 100, client)
+
+    place, meta = asyncio.run(run())
+    assert place.iata_code == "HRG"
+    assert place.resolved_via == "coordinates"
+    assert place.distance_km == 12.4
+    assert meta["radius_km"] == 100
+
+
+def test_resolve_place_by_coordinates_no_match_raises_never_guesses():
+    # test case D
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=_coord_transport([])) as client:
+            return await provider.resolve_place_by_coordinates(0.0, 0.0, 100, client)
+
+    with pytest.raises(DuffelPlaceNotFoundError):
+        asyncio.run(run())
+
+
+def test_resolve_place_by_coordinates_multiple_airports_deterministic_selection_preserves_alternates():
+    # test case E: prefers the city aggregate and preserves the individual
+    # airports as alternates rather than silently taking the first hit
+    places = [
+        {"iata_code": "LGW", "type": "airport", "name": "London Gatwick", "iata_country_code": "GB"},
+        {
+            "iata_code": "LON",
+            "type": "city",
+            "name": "London",
+            "iata_country_code": "GB",
+            "airports": [{"iata_code": "LHR"}, {"iata_code": "LGW"}],
+        },
+    ]
+
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=_coord_transport(places)) as client:
+            return await provider.resolve_place_by_coordinates(51.5, -0.1, 100, client)
+
+    place, _ = asyncio.run(run())
+    assert place.iata_code == "LON"
+    assert set(place.alternate_iata_codes) == {"LHR", "LGW"}
+
+
+def test_resolve_place_by_coordinates_http_failure_is_duffel_error():
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=_coord_transport([], status=503)) as client:
+            return await provider.resolve_place_by_coordinates(0.0, 0.0, 100, client)
+
+    with pytest.raises(DuffelError):
+        asyncio.run(run())
+
+
+def test_resolve_place_tags_resolved_via_text_query():
+    # test case F
+    places = [{"iata_code": "AYT", "type": "airport", "name": "Antalya", "iata_country_code": "TR"}]
+
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=_places_transport(places)) as client:
+            return await provider.resolve_place("Antalya", "TR", client)
+
+    place = asyncio.run(run())
+    assert place.resolved_via == "text_query"
+
+
 # --- FakeFlightProvider (test double) -------------------------------------
 
 
@@ -218,6 +306,27 @@ def test_fake_flight_provider_accepts_a_falsy_but_intentional_places_mapping():
 
     place = asyncio.run(run())
     assert place.iata_code == "AYT"
+
+
+def test_fake_flight_provider_resolves_by_coordinates():
+    place = TransportPlace(iata_code="HRG", type="airport", name="Hurghada", country_code="EG", resolved_via="coordinates")
+
+    async def run():
+        provider = FakeFlightProvider(places_by_coordinates={(27.25, 33.81): place})
+        return await provider.resolve_place_by_coordinates(27.25, 33.81, 100, None)
+
+    resolved, meta = asyncio.run(run())
+    assert resolved.iata_code == "HRG"
+    assert meta["radius_km"] == 100
+
+
+def test_fake_flight_provider_coordinates_miss_raises_never_guesses():
+    async def run():
+        provider = FakeFlightProvider()
+        return await provider.resolve_place_by_coordinates(0.0, 0.0, 100, None)
+
+    with pytest.raises(DuffelPlaceNotFoundError):
+        asyncio.run(run())
 
 
 def test_search_normalizes_offers_and_reports_zero_offers_distinctly():

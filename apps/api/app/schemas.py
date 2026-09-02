@@ -435,6 +435,8 @@ class TransportPlace(BaseModel):
     name: str
     country_code: Optional[str] = None
     alternate_iata_codes: List[str] = Field(default_factory=list)
+    resolved_via: Optional[Literal["confirmed_iata", "coordinates", "text_query"]] = None
+    distance_km: Optional[float] = None
 
 
 class FlightPassenger(BaseModel):
@@ -505,6 +507,7 @@ class DestinationFlightResearch(BaseModel):
     candidate_id: str
     origin_place: Optional[TransportPlace] = None
     destination_place: Optional[TransportPlace] = None
+    destination_place_evidence: Optional[Evidence] = None
     resolution_status: ComponentStatus = "pending"
     date_status: ComponentStatus = "pending"
     searches: List[FlightSearchOutcome] = Field(default_factory=list)
