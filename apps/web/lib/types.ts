@@ -331,6 +331,113 @@ export interface FlightRun {
   completed_at: string | null;
 }
 
+// --- Hotel research (Milestone 5) --------------------------------------------
+
+export type HotelInspectionStatus = "summary_only" | "rates_fetched" | "rates_fetch_failed";
+export type PaymentTiming = "pay_now" | "pay_at_property";
+
+export interface HotelGuest {
+  type: TravellerType;
+  age: number | null;
+}
+
+export interface HotelSearchPlan {
+  centre: { lat: number; lon: number };
+  radius_km: number;
+  check_in: string;
+  check_out: string;
+  nights: number;
+  date_variant: DateVariant;
+  rooms: number;
+  guests: HotelGuest[];
+}
+
+export interface HotelProperty {
+  provider_id: string;
+  name: string;
+  coordinates: { lat: number; lon: number } | null;
+  address: string | null;
+  country_code: string | null;
+  star_rating: FactResult<number>;
+  review_score: FactResult<number>;
+  review_count: FactResult<number>;
+  amenities: string[];
+  photos: string[];
+  beachfront: FactResult<boolean>;
+}
+
+export interface HotelRoom {
+  provider_room_id: string;
+  name: string;
+  description: string | null;
+  bed_info: string | null;
+  amenities: string[];
+  sea_view: FactResult<boolean>;
+  balcony: FactResult<boolean>;
+}
+
+export interface HotelRate {
+  provider_rate_id: string;
+  room_id: string;
+  total_amount: number;
+  total_currency: string;
+  nightly_equivalent: FactResult<number>;
+  board_type: FactResult<MealPlan>;
+  refundable: FactResult<boolean>;
+  cancellation_deadline: string | null;
+  payment_timing: FactResult<PaymentTiming>;
+  taxes_amount: number | null;
+  fees_amount: number | null;
+  quantity_available: number | null;
+}
+
+export interface HotelPropertyResult {
+  search_result_id: string;
+  property: HotelProperty;
+  cheapest_total_amount: number | null;
+  cheapest_total_currency: string | null;
+  inspection_status: HotelInspectionStatus;
+  rooms: HotelRoom[];
+  rates: HotelRate[];
+  evidence: Evidence;
+  rates_evidence: Evidence | null;
+  rates_fetch_error: string | null;
+}
+
+export interface HotelSearchOutcome {
+  plan: HotelSearchPlan;
+  status: ComponentStatus;
+  properties: HotelPropertyResult[];
+  evidence: Evidence | null;
+  error: string | null;
+  note: string | null;
+}
+
+export interface DestinationHotelResearch {
+  candidate_id: string;
+  geography_status: ComponentStatus;
+  date_status: ComponentStatus;
+  searches: HotelSearchOutcome[];
+  overall_status: ComponentStatus;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface HotelRun {
+  id: string;
+  trip_id: string;
+  candidate_run_id: string;
+  research_run_id: string;
+  brief_id: string;
+  version: number;
+  status: "pending" | "completed" | "partial" | "failed";
+  results: DestinationHotelResearch[];
+  warnings: string[];
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
 export function emptyTripBrief(): TripBrief {
   return {
     travellers: [],

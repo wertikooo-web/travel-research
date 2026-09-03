@@ -1,4 +1,4 @@
-import type { BriefRecord, CandidateRun, FlightRun, ResearchRun, TripBrief, TripHints } from "./types";
+import type { BriefRecord, CandidateRun, FlightRun, HotelRun, ResearchRun, TripBrief, TripHints } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -93,6 +93,18 @@ export function generateFlights(tripId: string) {
 
 export function getFlights(tripId: string) {
   return request<FlightRun>(`/api/trips/${tripId}/flights`, {
+    method: "GET",
+  });
+}
+
+export function generateHotels(tripId: string) {
+  return request<HotelRun>(`/api/trips/${tripId}/hotels`, {
+    method: "POST",
+  });
+}
+
+export function getHotels(tripId: string) {
+  return request<HotelRun>(`/api/trips/${tripId}/hotels`, {
     method: "GET",
   });
 }

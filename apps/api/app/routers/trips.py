@@ -13,6 +13,8 @@ from ..llm.provider import LLMConfigError, LLMParseError
 from ..research.candidate_generator import generate_candidates
 from ..research.duffel_provider import DuffelConfigError, DuffelFlightProvider
 from ..research.flight_pipeline import run_flight_research, summarize_flight_run_status
+from ..research.hotel_pipeline import run_hotel_research, summarize_hotel_run_status
+from ..research.hotel_provider import DuffelStaysConfigError, DuffelStaysProvider
 from ..research.research_pipeline import run_research, summarize_run_status
 from ..schemas import Candidate, DestinationResearch, ParseTripRequest, TripBrief
 
@@ -504,3 +506,140 @@ def get_trip_flight_run(trip_id: str, run_id: str, db: Session = Depends(get_db)
     if run is None:
         raise HTTPException(status_code=404, detail="flight run not found")
     return _serialize_flight_run(run)
+
+
+def get_hotel_provider():
+    """No fake-mode fallback for real answers, same reasoning as
+    get_flight_provider: TRIPMATCH_FAKE_HOTELS exists only for exercising the
+    UI end-to-end without credentials — its properties are obviously canned,
+    never presented as live validation."""
+    if os.environ.get("TRIPMATCH_FAKE_HOTELS") == "1":
+        from ..research.hotel_provider import FakeHotelProvider
+        from ..schemas import Coordinates, Evidence, HotelProperty, HotelPropertyResult
+
+        class _AnyCoordinateProperties(dict):
+            """Dev-only: resolves any search coordinates to the same canned
+            property, so the UI smoke test doesn't depend on which
+            candidate the live LLM happens to generate."""
+
+            def get(self, _key, _default=None):
+                evidence = Evidence(
+                    source_type="structured_travel_provider",
+                    provider="Duffel Stays",
+                    retrieved_at="2026-09-02T00:00:00Z",
+                    title="fake stays search",
+                    confidence="high",
+                )
+                return [
+                    HotelPropertyResult(
+                        search_result_id="srr_fake_1",
+                        property=HotelProperty(
+                            provider_id="acc_fake_1",
+                            name="Fake Beach Resort",
+                            coordinates=Coordinates(lat=36.9, lon=30.7),
+                            country_code="TR",
+                        ),
+                        cheapest_total_amount=540.0,
+                        cheapest_total_currency="EUR",
+                        inspection_status="summary_only",
+                        evidence=evidence,
+                    )
+                ]
+
+        return FakeHotelProvider(properties_by_key=_AnyCoordinateProperties())
+    try:
+        return DuffelStaysProvider()
+    except DuffelStaysConfigError as e:
+        raise HTTPException(status_code=500, detail=f"Hotel provider not configured: {e}") from e
+
+
+def _serialize_hotel_run(run: models.HotelRun) -> dict:
+    return {
+        "id": run.id,
+        "trip_id": run.trip_id,
+        "candidate_run_id": run.candidate_run_id,
+        "research_run_id": run.research_run_id,
+        "brief_id": run.brief_id,
+        "version": run.version,
+        "status": run.status,
+        "results": run.results or [],
+        "warnings": run.warnings or [],
+        "error": run.error,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
+@router.post("/{trip_id}/hotels")
+async def generate_trip_hotels(
+    trip_id: str,
+    db: Session = Depends(get_db),
+    provider=Depends(get_hotel_provider),
+):
+    trip = _get_trip_or_404(trip_id, db)
+    latest_brief = _latest_brief(trip)
+    if latest_brief is None or latest_brief.confirmed_at is None:
+        raise HTTPException(status_code=400, detail="hotel research requires a confirmed brief")
+    if not trip.candidate_runs:
+        raise HTTPException(status_code=400, detail="hotel research requires an existing candidate run")
+    latest_candidate_run = trip.candidate_runs[-1]
+    if latest_candidate_run.status != "completed" or not latest_candidate_run.candidates:
+        raise HTTPException(status_code=400, detail="latest candidate run has no candidates to search hotels for")
+    if not trip.research_runs:
+        raise HTTPException(
+            status_code=400, detail="hotel research requires an existing research run — call POST .../research first"
+        )
+    latest_research_run = trip.research_runs[-1]
+    if not latest_research_run.results:
+        raise HTTPException(status_code=400, detail="latest research run has no destination identities to resolve hotels from")
+
+    next_version = len(trip.hotel_runs) + 1
+    run = models.HotelRun(
+        trip_id=trip.id,
+        candidate_run_id=latest_candidate_run.id,
+        research_run_id=latest_research_run.id,
+        brief_id=latest_brief.id,
+        version=next_version,
+        status="pending",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    try:
+        brief = TripBrief.model_validate(latest_brief.structured_brief)
+        candidates = [Candidate.model_validate(c) for c in latest_candidate_run.candidates]
+        research_by_candidate = {
+            r["candidate_id"]: DestinationResearch.model_validate(r) for r in latest_research_run.results
+        }
+        results = await run_hotel_research(candidates, research_by_candidate, brief, provider)
+    except Exception as e:  # a hotel-run failure must never corrupt a prior successful run
+        run.status = "failed"
+        run.error = f"hotel research failed: {e}"
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=502, detail="Hotel research failed unexpectedly") from e
+
+    run.status = summarize_hotel_run_status(results)
+    run.results = [r.model_dump(mode="json") for r in results]
+    run.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(run)
+    return _serialize_hotel_run(run)
+
+
+@router.get("/{trip_id}/hotels")
+def get_trip_hotels(trip_id: str, db: Session = Depends(get_db)):
+    trip = _get_trip_or_404(trip_id, db)
+    if not trip.hotel_runs:
+        raise HTTPException(status_code=404, detail="no hotel run yet — call POST .../hotels first")
+    return _serialize_hotel_run(trip.hotel_runs[-1])
+
+
+@router.get("/{trip_id}/hotels/{run_id}")
+def get_trip_hotel_run(trip_id: str, run_id: str, db: Session = Depends(get_db)):
+    trip = _get_trip_or_404(trip_id, db)
+    run = next((r for r in trip.hotel_runs if r.id == run_id), None)
+    if run is None:
+        raise HTTPException(status_code=404, detail="hotel run not found")
+    return _serialize_hotel_run(run)

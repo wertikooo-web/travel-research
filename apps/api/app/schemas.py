@@ -529,3 +529,162 @@ class FlightRunSummary(BaseModel):
     error: Optional[str] = None
     created_at: str
     completed_at: Optional[str] = None
+
+
+# --- Hotel research (Milestone 5) --------------------------------------------
+#
+# Three separate semantic levels, never conflated: HotelProperty (the
+# accommodation itself — stars, coordinates, amenities), HotelRoom (a room
+# category — bed info, sea view/balcony), HotelRate (the commercial offer for
+# a room — price, board/meal, cancellation, payment timing). "This hotel
+# exists" / "this hotel is available on these dates" / "this room/rate is
+# available" / "this rate includes breakfast" are different facts and stay on
+# the model level that actually owns them. Same FactResult pattern as M3:
+# unknown is a real state, never silently coerced to false. No LLM anywhere
+# in this path — geography comes from M3's verified DestinationIdentity
+# coordinates, never a display string; dates come from the same bounded,
+# deterministic date-plan strategy flights already use.
+
+HotelInspectionStatus = Literal["summary_only", "rates_fetched", "rates_fetch_failed"]
+PaymentTiming = Literal["pay_now", "pay_at_property"]
+
+
+class HotelGuest(BaseModel):
+    type: TravellerType
+    age: Optional[int] = None
+
+
+class HotelSearchPlan(BaseModel):
+    """What we actually asked the provider — persisted so 'what did we search
+    for?' is always answerable, mirroring FlightSearchPlan. `centre` +
+    `radius_km` are the geographic search area actually used, not merely the
+    destination's own coordinates, so a later scoring pass knows what area
+    was covered."""
+
+    centre: Coordinates
+    radius_km: float
+    check_in: date
+    check_out: date
+    nights: int
+    date_variant: DateVariant
+    rooms: int
+    guests: List[HotelGuest]
+
+
+class HotelProperty(BaseModel):
+    """Facts about the accommodation itself — never a room or rate fact.
+    `beachfront` can only ever become verified_true from a literal, matching
+    provider amenity/content signal; the absence of such a signal is
+    `unknown`, never `verified_false` (missing amenity data is not proof of
+    absence)."""
+
+    provider_id: str
+    name: str
+    coordinates: Optional[Coordinates] = None
+    address: Optional[str] = None
+    country_code: Optional[str] = None
+    star_rating: FactResult[int] = Field(default_factory=_unknown_fact)
+    review_score: FactResult[float] = Field(default_factory=_unknown_fact)
+    review_count: FactResult[int] = Field(default_factory=_unknown_fact)
+    amenities: List[str] = Field(default_factory=list)
+    photos: List[str] = Field(default_factory=list)
+    beachfront: FactResult[bool] = Field(default_factory=_unknown_fact)
+
+
+class HotelRoom(BaseModel):
+    """A room/product category — never where meal plan, cancellation, or
+    payment timing belong; those are rate facts. `sea_view`/`balcony` are
+    marked verified_true only from an explicit, provider-controlled signal
+    (a structured amenity, or the room's own name/description literally
+    stating it) — never inferred from the property being in a beach
+    destination or from marketing tone."""
+
+    provider_room_id: str
+    name: str
+    description: Optional[str] = None
+    bed_info: Optional[str] = None
+    amenities: List[str] = Field(default_factory=list)
+    sea_view: FactResult[bool] = Field(default_factory=_unknown_fact)
+    balcony: FactResult[bool] = Field(default_factory=_unknown_fact)
+
+
+class HotelRate(BaseModel):
+    """The commercial offer for one room. `total_amount` is the actual total
+    stay price the provider returned — never a guessed nightly rate.
+    `nightly_equivalent` is arithmetic derived from that total and carries
+    `is_derived=True`, since it traces its truth through an already-evidenced
+    input rather than needing its own source."""
+
+    provider_rate_id: str
+    room_id: str
+    total_amount: float
+    total_currency: str
+    nightly_equivalent: FactResult[float] = Field(default_factory=_unknown_fact)
+    board_type: FactResult[MealPlan] = Field(default_factory=_unknown_fact)
+    refundable: FactResult[bool] = Field(default_factory=_unknown_fact)
+    cancellation_deadline: Optional[str] = None
+    payment_timing: FactResult[PaymentTiming] = Field(default_factory=_unknown_fact)
+    taxes_amount: Optional[float] = None
+    fees_amount: Optional[float] = None
+    quantity_available: Optional[int] = None
+
+
+class HotelPropertyResult(BaseModel):
+    """One accommodation as it appeared in a search, plus however deep we
+    inspected it. `summary_only` means only what the initial search result
+    itself guarantees (identity + cheapest total) is trustworthy — room/rate
+    facts must not be read off a summary_only result. `rates_fetched` means
+    fetch_all_rates succeeded and `rooms`/`rates` are populated from it.
+    `rates_fetch_failed` means the property stays visible with its summary
+    data intact, but detailed facts remain unknown for it — one property's
+    deep-fetch failure never removes it or sinks the rest of the search."""
+
+    search_result_id: str
+    property: HotelProperty
+    cheapest_total_amount: Optional[float] = None
+    cheapest_total_currency: Optional[str] = None
+    inspection_status: HotelInspectionStatus = "summary_only"
+    rooms: List[HotelRoom] = Field(default_factory=list)
+    rates: List[HotelRate] = Field(default_factory=list)
+    evidence: Evidence
+    rates_evidence: Optional[Evidence] = None
+    rates_fetch_error: Optional[str] = None
+
+
+class HotelSearchOutcome(BaseModel):
+    """One executed (or explicitly failed) search for one date-variant plan.
+    A successful search with zero properties and a provider failure are
+    different `status` values, never conflated — same distinction M4 makes
+    for flights."""
+
+    plan: HotelSearchPlan
+    status: ComponentStatus = "pending"
+    properties: List[HotelPropertyResult] = Field(default_factory=list)
+    evidence: Optional[Evidence] = None
+    error: Optional[str] = None
+    note: Optional[str] = None
+
+
+class DestinationHotelResearch(BaseModel):
+    candidate_id: str
+    geography_status: ComponentStatus = "pending"
+    date_status: ComponentStatus = "pending"
+    searches: List[HotelSearchOutcome] = Field(default_factory=list)
+    overall_status: ComponentStatus = "pending"
+    warnings: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+
+
+class HotelRunSummary(BaseModel):
+    id: str
+    trip_id: str
+    candidate_run_id: str
+    research_run_id: str
+    brief_id: str
+    version: int
+    status: Literal["pending", "completed", "partial", "failed"]
+    results: List[DestinationHotelResearch] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    created_at: str
+    completed_at: Optional[str] = None

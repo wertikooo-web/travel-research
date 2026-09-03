@@ -46,6 +46,11 @@ class Trip(Base):
         back_populates="trip",
         order_by="FlightRun.version",
     )
+    hotel_runs = relationship(
+        "HotelRun",
+        back_populates="trip",
+        order_by="HotelRun.version",
+    )
 
 
 class TripBriefRecord(Base):
@@ -143,3 +148,31 @@ class FlightRun(Base):
     completed_at = Column(DateTime, nullable=True)
 
     trip = relationship("Trip", back_populates="flight_runs")
+
+
+class HotelRun(Base):
+    """One hotel-search pass over a ResearchRun's resolved destinations.
+
+    Same dependency shape and immutability contract as FlightRun: depends on
+    candidate_run_id (which candidates) and research_run_id (whose
+    DestinationIdentity to search hotel geography from). A rerun is version
+    N+1; yesterday's prices/availability stay exactly as retrieved in
+    version N — a historical snapshot, never overwritten.
+    """
+
+    __tablename__ = "hotel_runs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    trip_id = Column(String, ForeignKey("trips.id"), nullable=False)
+    candidate_run_id = Column(String, ForeignKey("candidate_runs.id"), nullable=False)
+    research_run_id = Column(String, ForeignKey("research_runs.id"), nullable=False)
+    brief_id = Column(String, ForeignKey("trip_briefs.id"), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False, default="pending")  # pending|completed|partial|failed
+    results = Column(JSON, nullable=True)  # List[DestinationHotelResearch]
+    warnings = Column(JSON, nullable=True)
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    trip = relationship("Trip", back_populates="hotel_runs")

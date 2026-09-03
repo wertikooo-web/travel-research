@@ -4,6 +4,7 @@ import { useState } from "react";
 import BriefConfirmation from "@/components/BriefConfirmation";
 import CandidateList from "@/components/CandidateList";
 import FlightResearchView from "@/components/FlightResearchView";
+import HotelResearchView from "@/components/HotelResearchView";
 import ResearchView from "@/components/ResearchView";
 import TripInputForm from "@/components/TripInputForm";
 import {
@@ -12,11 +13,12 @@ import {
   createTrip,
   generateCandidates,
   generateFlights,
+  generateHotels,
   generateResearch,
   parseTrip,
   updateBrief,
 } from "@/lib/api";
-import type { BriefRecord, CandidateRun, FlightRun, ResearchRun, TripBrief, TripHints } from "@/lib/types";
+import type { BriefRecord, CandidateRun, FlightRun, HotelRun, ResearchRun, TripBrief, TripHints } from "@/lib/types";
 
 type Stage = "input" | "confirm" | "confirmed";
 
@@ -40,6 +42,10 @@ export default function Home() {
   const [flightRun, setFlightRun] = useState<FlightRun | null>(null);
   const [flightsLoading, setFlightsLoading] = useState(false);
   const [flightsError, setFlightsError] = useState<string | null>(null);
+
+  const [hotelRun, setHotelRun] = useState<HotelRun | null>(null);
+  const [hotelsLoading, setHotelsLoading] = useState(false);
+  const [hotelsError, setHotelsError] = useState<string | null>(null);
 
   async function handleSubmit(text: string, hints: TripHints | undefined) {
     setLoading(true);
@@ -91,6 +97,8 @@ export default function Home() {
     setResearchError(null);
     setFlightRun(null);
     setFlightsError(null);
+    setHotelRun(null);
+    setHotelsError(null);
   }
 
   async function handleGenerateCandidates() {
@@ -132,6 +140,20 @@ export default function Home() {
       setFlightsError(e instanceof ApiError ? e.message : "Не удалось найти рейсы. Попробуйте ещё раз.");
     } finally {
       setFlightsLoading(false);
+    }
+  }
+
+  async function handleGenerateHotels() {
+    if (!tripId) return;
+    setHotelsLoading(true);
+    setHotelsError(null);
+    try {
+      const run = await generateHotels(tripId);
+      setHotelRun(run);
+    } catch (e) {
+      setHotelsError(e instanceof ApiError ? e.message : "Не удалось найти отели. Попробуйте ещё раз.");
+    } finally {
+      setHotelsLoading(false);
     }
   }
 
@@ -245,6 +267,30 @@ export default function Home() {
                       <FlightResearchView results={flightRun.results} candidates={candidateRun.candidates} runWarnings={flightRun.warnings} />
                     </div>
                   )}
+
+                  <div className="flex flex-col gap-4 border-t border-gray-200 pt-4">
+                    <button
+                      type="button"
+                      onClick={handleGenerateHotels}
+                      disabled={hotelsLoading}
+                      className="self-start rounded-lg bg-blue-600 px-6 py-3 text-base font-medium text-white hover:bg-blue-700 disabled:bg-gray-300"
+                    >
+                      {hotelsLoading ? "Ищем отели…" : "Найти отели"}
+                    </button>
+
+                    {hotelsError && (
+                      <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{hotelsError}</div>
+                    )}
+
+                    {hotelRun && (
+                      <div>
+                        <h2 className="mb-3 text-lg font-semibold text-gray-900">
+                          Отели · run v{hotelRun.version} ({hotelRun.status})
+                        </h2>
+                        <HotelResearchView results={hotelRun.results} candidates={candidateRun.candidates} runWarnings={hotelRun.warnings} />
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
