@@ -79,6 +79,25 @@ def _normalize_itinerary(slice_data: dict) -> FlightItinerary:
     )
 
 
+def _extract_cabin(slices: list) -> Optional[str]:
+    """Real Duffel offers carry no offer-level cabin_class field — it lives
+    per-segment, per-passenger (slices[].segments[].passengers[].cabin_class),
+    confirmed against the live API during Milestone 4 acceptance testing. The
+    first outbound segment's first passenger is a reasonable single
+    representative value for this offer's V0 scalar `cabin` field — every
+    passenger on a single-cabin economy/business search shares the same
+    cabin, and mixed-cabin offers are out of scope this milestone."""
+    if not slices:
+        return None
+    segments = slices[0].get("segments") or []
+    if not segments:
+        return None
+    passengers = segments[0].get("passengers") or []
+    if not passengers:
+        return None
+    return passengers[0].get("cabin_class") or passengers[0].get("cabin_class_marketing_name")
+
+
 def normalize_offer(raw: dict, traveller_count: int, retrieved_at: str) -> FlightOffer:
     slices = raw.get("slices") or []
     outbound = _normalize_itinerary(slices[0]) if len(slices) >= 1 else FlightItinerary()
@@ -90,7 +109,7 @@ def normalize_offer(raw: dict, traveller_count: int, retrieved_at: str) -> Fligh
         total_amount=float(raw["total_amount"]),
         total_currency=raw["total_currency"],
         traveller_count=traveller_count,
-        cabin=raw.get("cabin_class") or raw.get("cabin_class_marketing_name"),
+        cabin=_extract_cabin(slices),
         retrieved_at=retrieved_at,
         expires_at=raw.get("expires_at"),
     )
@@ -156,11 +175,18 @@ class DuffelFlightProvider:
         """Verified destination coordinates, not display-language text, drive
         this lookup — the primary destination-resolution path when
         DestinationIdentity carries trustworthy coordinates. One bounded
-        radius attempt; never progressively widened."""
+        radius attempt; never progressively widened.
+
+        Duffel's `rad` parameter is documented in metres, not kilometres —
+        confirmed against the live API during Milestone 4 acceptance testing
+        (a km value sent as-is silently returned zero results for every real
+        destination). Our own radius_km stays in kilometres everywhere else
+        (the domain model, evidence, callers); only the outbound HTTP param
+        is converted."""
         try:
             resp = await client.get(
                 f"{DUFFEL_API_BASE}/places/suggestions",
-                params={"lat": lat, "lng": lon, "rad": radius_km},
+                params={"lat": lat, "lng": lon, "rad": radius_km * 1000},
                 headers=self._headers(),
                 timeout=20.0,
             )
@@ -198,11 +224,15 @@ class DuffelFlightProvider:
         return place, meta
 
     async def search(self, plan: FlightSearchPlan, client: httpx.AsyncClient) -> Tuple[List[FlightOffer], dict]:
+        # Duffel rejects a passenger carrying both `type` and `age` together
+        # ("You may only specify an age or a type – not both") — confirmed
+        # against the live API during Milestone 4 acceptance testing. When we
+        # know the age, send only that and let Duffel classify the passenger
+        # itself (airlines vary on where the adult/child line falls); `type`
+        # is sent only when age is unknown.
         passengers_payload = []
         for p in plan.passengers:
-            entry: dict = {"type": p.type}
-            if p.age is not None:
-                entry["age"] = p.age
+            entry: dict = {"age": p.age} if p.age is not None else {"type": p.type}
             passengers_payload.append(entry)
 
         body = {

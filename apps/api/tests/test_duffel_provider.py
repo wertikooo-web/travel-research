@@ -231,6 +231,25 @@ def test_resolve_place_by_coordinates_returns_nearby_airport():
     assert meta["radius_km"] == 100
 
 
+def test_resolve_place_by_coordinates_sends_rad_in_metres_not_km():
+    # live-Duffel regression: rad is documented (and confirmed against the
+    # real API) in metres — a radius_km=100 call must send rad=100000, not
+    # rad=100, or every real coordinate search silently returns zero results
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(httpx.QueryParams(request.url.query))
+        return httpx.Response(200, json={"data": [{"iata_code": "HRG", "type": "airport", "name": "Hurghada", "iata_country_code": "EG"}]})
+
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await provider.resolve_place_by_coordinates(27.25, 33.81, 100, client)
+
+    asyncio.run(run())
+    assert captured["params"]["rad"] == "100000"
+
+
 def test_resolve_place_by_coordinates_no_match_raises_never_guesses():
     # test case D
     async def run():
