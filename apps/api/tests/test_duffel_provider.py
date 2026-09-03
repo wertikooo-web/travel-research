@@ -104,6 +104,45 @@ def test_normalize_offer_missing_segments_does_not_crash():
     offer = normalize_offer(raw, traveller_count=1, retrieved_at="2026-09-02T00:00:00Z")
     assert offer.outbound.segments == []
     assert offer.return_ is None
+    assert offer.cabin is None  # no segments/passengers to read a cabin from — unknown, not guessed
+
+
+def test_normalize_offer_reads_cabin_from_first_segment_passenger_not_offer_top_level():
+    # live-Duffel regression: real offers carry no offer-level cabin_class
+    # field at all — cabin lives nested at
+    # slices[0].segments[0].passengers[0].cabin_class. This fixture is
+    # shaped like a real Duffel offer (no top-level cabin_class) and must
+    # fail against the old raw.get("cabin_class") implementation.
+    raw = {
+        "id": "off_real_shaped",
+        "total_amount": "107.03",
+        "total_currency": "EUR",
+        "slices": [
+            {
+                "duration": "PT2H5M",
+                "segments": [
+                    {
+                        "origin": {"iata_code": "RMO"},
+                        "destination": {"iata_code": "AYT"},
+                        "departing_at": "2026-10-20T06:25:00",
+                        "arriving_at": "2026-10-20T08:30:00",
+                        "duration": "PT2H5M",
+                        "passengers": [
+                            {
+                                "passenger_id": "pas_1",
+                                "cabin_class_marketing_name": "Economy",
+                                "cabin_class": "economy",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    assert "cabin_class" not in raw  # this fixture has no offer-level field, matching the real API
+
+    offer = normalize_offer(raw, traveller_count=1, retrieved_at="2026-09-02T00:00:00Z")
+    assert offer.cabin == "economy"
 
 
 # --- place resolution -----------------------------------------------------
@@ -393,3 +432,46 @@ def test_search_sends_expected_slices_and_passengers():
     assert captured["body"]["data"]["max_connections"] == 1
     assert captured["headers"]["authorization"] == "Bearer test_key"
     assert captured["headers"]["duffel-version"] == "v2"
+
+
+def test_search_passenger_payload_sends_age_xor_type_never_both():
+    # live-Duffel regression: a real 422 confirmed Duffel rejects a passenger
+    # carrying both `type` and `age` together ("You may only specify an age
+    # or a type – not both"). A known age must send only `age`; an unknown
+    # age must send only `type`. This exercises provider.search()'s actual
+    # request-building path, not a reimplementation of it.
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"data": {"id": "orq_1", "offers": []}})
+
+    plan = FlightSearchPlan(
+        origin=TransportPlace(iata_code="RMO", type="airport", name="Chisinau"),
+        destination=TransportPlace(iata_code="AYT", type="airport", name="Antalya", country_code="TR"),
+        outbound_date=date(2026, 10, 20),
+        return_date=date(2026, 10, 28),
+        nights=8,
+        date_variant="exact",
+        passengers=[
+            FlightPassenger(traveller_id="t1", type="adult"),  # no known age
+            FlightPassenger(traveller_id="t2", type="child", age=8),  # known age
+        ],
+        cabin="economy",
+        max_connections_sent=1,
+        connection_policy="unspecified",
+    )
+
+    async def run():
+        provider = DuffelFlightProvider(api_key="test_key")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await provider.search(plan, client)
+
+    asyncio.run(run())
+    passengers = captured["body"]["data"]["passengers"]
+    assert passengers[0] == {"type": "adult"}
+    assert "age" not in passengers[0]
+    assert passengers[1] == {"age": 8}
+    assert "type" not in passengers[1]
