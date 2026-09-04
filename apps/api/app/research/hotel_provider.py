@@ -7,15 +7,25 @@ assumes are DOCUMENTATION-DERIVED, not independently live-verified. Duffel
 Stays returned 403 "This feature is not enabled for your account" for the
 test-mode key available during Milestone 5 development — an account/product
 gate, not a credential or code problem. M4 already taught this project that
-documentation and real API behavior can diverge (radius units, passenger
-schema, offer-level cabin field), so every field this module reads is
-accessed defensively (`.get()`, never assumed present) and every fact that
-can't be safely, narrowly interpreted from the documented shape is left
-`unknown` rather than guessed. Two specific unresolved-pending-live-access
-decisions are called out at their `# LIVE-UNVERIFIED:` comments below:
-`radius` units, and `refundable`/`cancellation_deadline` interpretation from
-`cancellation_timeline` (left permanently `unknown`/`None` in this pass
-rather than guess at an undocumented nested structure).
+documentation and real API behavior can diverge, so every field this module
+reads is accessed defensively (`.get()`, never assumed present) and every
+fact that can't be safely, narrowly interpreted from the documented shape is
+left `unknown` rather than guessed.
+
+`location.radius` units are documented (kilometres) and are NOT
+LIVE-UNVERIFIED — deliberately different from Flights Places'
+/places/suggestions?rad=... (metres, confirmed live in M4). Do not conflate
+the two; radius_km goes straight through to `radius` with no conversion.
+Likewise the Stays guest payload is documented to send `type` and `age`
+together for a child (`{"age": 7, "type": "child"}`) — this is NOT the
+Flights offer_request passenger contract, which forbids exactly that
+combination; do not reapply that M4 lesson here.
+
+One remaining unresolved-pending-live-access decision is called out at its
+`# LIVE-UNVERIFIED:` comment below: `refundable`/`cancellation_deadline`
+interpretation from `cancellation_timeline` (left permanently
+`unknown`/`None` in this pass rather than guess at an undocumented nested
+structure).
 """
 
 from __future__ import annotations
@@ -205,12 +215,12 @@ class DuffelStaysProvider:
                 "rooms": plan.rooms,
                 "guests": guests_payload,
                 "location": {
-                    # LIVE-UNVERIFIED: radius units are not stated in Duffel's
-                    # Stays docs. M4 found Places' `rad` param is in metres
-                    # despite reading like a bare number — adopting the same
-                    # convention here as the safer default until Stays access
-                    # lets this be confirmed against a real response.
-                    "radius": plan.radius_km * 1000,
+                    # Stays' location.radius is documented in kilometres —
+                    # deliberately different from Flights Places'
+                    # /places/suggestions?rad=... (metres, confirmed live in
+                    # M4). Do not reapply that conversion here: radius_km
+                    # goes straight through, no *1000.
+                    "radius": plan.radius_km,
                     "geographic_coordinates": {"latitude": plan.centre.lat, "longitude": plan.centre.lon},
                 },
             }

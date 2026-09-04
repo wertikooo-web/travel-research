@@ -55,7 +55,12 @@ RAW_SEARCH_RESULT = {
 # --- search() request contract --------------------------------------------
 
 
-def test_search_sends_radius_in_metres_and_documented_body_shape():
+def test_search_sends_radius_in_kilometres_no_conversion_and_documented_body_shape():
+    # Duffel Stays' location.radius is documented in KILOMETRES — deliberately
+    # different from Flights Places' /places/suggestions?rad=... (metres,
+    # confirmed live in M4). radius_km must go straight through with no
+    # *1000 conversion. This exercises the real provider.search() request-
+    # building path, not a reimplementation of it.
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -75,14 +80,16 @@ def test_search_sends_radius_in_metres_and_documented_body_shape():
     assert body["check_out_date"] == "2026-10-28"
     assert body["rooms"] == 1
     assert body["guests"] == [{"type": "adult"}]
-    assert body["location"]["radius"] == 15000  # km -> metres, same convention M4 found for Places
+    assert body["location"]["radius"] == 15  # kilometres, unconverted — NOT 15000
     assert body["location"]["geographic_coordinates"] == {"latitude": 36.8969, "longitude": 30.7133}
 
 
 def test_search_sends_child_guest_with_type_and_age_together():
-    # Stays docs explicitly show children carrying BOTH type and age (unlike
-    # the Flights offer_request passenger schema, which forbids exactly
-    # that combination) — do not blindly reapply the M4 flights lesson here.
+    # Stays' documented guest contract sends type AND age together for a
+    # child ({"age": 7, "type": "child"}) — the OPPOSITE of the Flights
+    # offer_request passenger schema (M4), which forbids that exact
+    # combination. Do not blindly reapply the Flights lesson to Stays: these
+    # are two different Duffel products with two different contracts.
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
